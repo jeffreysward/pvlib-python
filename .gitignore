@@ -79,6 +79,7 @@ coverage.xml
 
 #Datafiles
 *.csv
+wrfout*
 
 # vi
 *.swp
