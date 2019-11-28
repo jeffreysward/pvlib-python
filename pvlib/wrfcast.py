@@ -228,7 +228,7 @@ class ForecastModel(object):
             self.query_variables = query_variables
 
 
-        self.netcdf_data =
+        self.netcdf_data = 0
 
         # might be better to go to xarray here so that we can handle
         # higher dimensional data for more advanced applications
