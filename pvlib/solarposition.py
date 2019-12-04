@@ -20,6 +20,7 @@ except ImportError:
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 import warnings
 
 from pvlib import atmosphere
@@ -358,6 +359,113 @@ def spa_python(time, latitude, longitude,
                            'elevation': elevation, 'azimuth': azimuth,
                            'equation_of_time': eot},
                           index=time)
+
+    return result
+
+
+def spa_xarray_python(time, latitude, longitude, latitude_index, longitude_index,
+               altitude=0, pressure=101325, temperature=12, delta_t=67.0,
+               atmos_refract=None, how='numpy', numthreads=4, **kwargs):
+    """
+    Calculate the solar position using a python implementation of the
+    NREL SPA algorithm described in [1].
+
+    If numba is installed, the functions can be compiled to
+    machine code and the function can be multithreaded.
+    Without numba, the function evaluates via numpy with
+    a slight performance hit.
+
+    Parameters
+    ----------
+    time : pandas.DatetimeIndex
+        Localized or UTC.
+    latitude : float
+    longitude : float
+    altitude : float, default 0
+    pressure : int or float, optional, default 101325
+        avg. yearly air pressure in Pascals.
+    temperature : int or float, optional, default 12
+        avg. yearly air temperature in degrees C.
+    delta_t : float, optional, default 67.0
+        If delta_t is None, uses spa.calculate_deltat
+        using time.year and time.month from pandas.DatetimeIndex.
+        For most simulations specifing delta_t is sufficient.
+        Difference between terrestrial time and UT1.
+        *Note: delta_t = None will break code using nrel_numba,
+        this will be fixed in a future version.*
+        The USNO has historical and forecasted delta_t [3].
+    atmos_refrac : None or float, optional, default None
+        The approximate atmospheric refraction (in degrees)
+        at sunrise and sunset.
+    how : str, optional, default 'numpy'
+        Options are 'numpy' or 'numba'. If numba >= 0.17.0
+        is installed, how='numba' will compile the spa functions
+        to machine code and run them multithreaded.
+    numthreads : int, optional, default 4
+        Number of threads to use if how == 'numba'.
+
+    Returns
+    -------
+    DataFrame
+        The DataFrame will have the following columns:
+        apparent_zenith (degrees),
+        zenith (degrees),
+        apparent_elevation (degrees),
+        elevation (degrees),
+        azimuth (degrees),
+        equation_of_time (minutes).
+
+
+    References
+    ----------
+    [1] I. Reda and A. Andreas, Solar position algorithm for solar
+    radiation applications. Solar Energy, vol. 76, no. 5, pp. 577-589, 2004.
+
+    [2] I. Reda and A. Andreas, Corrigendum to Solar position algorithm for
+    solar radiation applications. Solar Energy, vol. 81, no. 6, p. 838, 2007.
+
+    [3] USNO delta T:
+    http://www.usno.navy.mil/USNO/earth-orientation/eo-products/long-term
+
+    See also
+    --------
+    pyephem, spa_c, ephemeris
+    """
+
+    # Added by Tony Lorenzo (@alorenzo175), University of Arizona, 2015
+
+    lat = latitude
+    lat_idx = latitude_index
+    lon = longitude
+    lon_idx = longitude_index
+    elev = altitude
+    pressure = pressure / 100  # pressure must be in millibars for calculation
+
+    atmos_refract = atmos_refract or 0.5667
+
+    if not isinstance(time, pd.DatetimeIndex):
+        try:
+            time = pd.DatetimeIndex(time)
+        except (TypeError, ValueError):
+            time = pd.DatetimeIndex([time, ])
+
+    unixtime = np.array(time.astype(np.int64) / 10 ** 9)
+
+    spa = _spa_python_import(how)
+
+    delta_t = delta_t or spa.calculate_deltat(time.year, time.month)
+
+    app_zenith, zenith, app_elevation, elevation, azimuth, eot = \
+        spa.solar_position(unixtime, lat, lon, elev, pressure, temperature,
+                           delta_t, atmos_refract, numthreads)
+
+    result = pd.DataFrame({'apparent_zenith': app_zenith, 'zenith': zenith,
+                           'apparent_elevation': app_elevation,
+                           'elevation': elevation, 'azimuth': azimuth,
+                           'equation_of_time': eot,
+                           'Time': time, 'south_north': lat_idx, 'west_east': lon_idx},
+                          )
+    result.set_index(['Time', 'south_north', 'west_east'], inplace=True)
 
     return result
 
