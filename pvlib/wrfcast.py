@@ -540,7 +540,7 @@ class ForecastModel(object):
 
         return irrads
 
-    def dni_and_dhi_to_ghi(self, dni, dhi, **kwargs):
+    def dni_and_dhi_to_ghi(self, dni, dhi, zenith, **kwargs):
         """
         Calculates global horizontal irradiance.
 
@@ -550,6 +550,7 @@ class ForecastModel(object):
             Direct normal irradiance in W m-2.
         dhi : Series
             Diffuse normal irradiance in W m-2.
+        zenith : Series
         **kwargs
             Not used
 
@@ -559,8 +560,8 @@ class ForecastModel(object):
             Global horizontal irradiance in W m-2.
         """
 
-        solpos = self.location.get_solarposition(dni.index)
-        ghi = dhi + dni * np.cos(np.radians(solpos['zenith']))
+
+        ghi = dhi + dni * np.cos(np.radians(zenith))
         return ghi
 
     def kelvin_to_celsius(self, temperature):
