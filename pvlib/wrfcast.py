@@ -540,7 +540,7 @@ class ForecastModel(object):
 
         return irrads
 
-    def dni_and_dhi_to_ghi(self, dni, dhi, zenith, **kwargs):
+    def dni_and_dhi_to_ghi(self, dni, dhi, cos_zenith, **kwargs):
         """
         Calculates global horizontal irradiance.
 
@@ -550,7 +550,8 @@ class ForecastModel(object):
             Direct normal irradiance in W m-2.
         dhi : Series
             Diffuse normal irradiance in W m-2.
-        zenith : Series
+        cos_zenith : Series
+            Cosine of the solar zenith angle (dimensionless).
         **kwargs
             Not used
 
@@ -560,8 +561,7 @@ class ForecastModel(object):
             Global horizontal irradiance in W m-2.
         """
 
-
-        ghi = dhi + dni * np.cos(np.radians(zenith))
+        ghi = dhi + dni * cos_zenith
         return ghi
 
     def kelvin_to_celsius(self, temperature):
@@ -645,12 +645,13 @@ class WRF(ForecastModel):
         model = 'WRF Forecast'
 
         self.variables = {
-            'temp_air': 'TEMP at 2 M', # T2
-            'wind_speed_u': 'U at 10 M', # U10
-            'wind_speed_v': 'V at 10 M', # V10
-            'total_clouds': 'CLOUD FRACTION', # CLDFRA
-            'dni': 'Shortwave surface downward direct normal irradiance', # SWDDNI
-            'dhi': 'Shortwave surface downward diffuse irradiance' # SWDDIF
+            'temp_air': 'TEMP at 2 M',  # T2
+            'wind_speed_u': 'U at 10 M',  # U10
+            'wind_speed_v': 'V at 10 M',  # V10
+            'total_clouds': 'CLOUD FRACTION',  # CLDFRA
+            'cos_zenith': 'Cos of solar zenith angle',  # COSZEN
+            'dni': 'Shortwave surface downward direct normal irradiance',  # SWDDNI
+            'dhi': 'Shortwave surface downward diffuse irradiance',  # SWDDIF
             }
 
         self.output_variables = [
@@ -663,7 +664,7 @@ class WRF(ForecastModel):
 
         super(WRF, self).__init__(model_type, model, set_type, vert_level=None)
 
-    def process_data(self, data, cloud_cover='total_clouds', **kwargs):
+    def process_data(self, data, **kwargs):
         """
         Defines the steps needed to convert raw forecast data
         into processed forecast data.
@@ -672,8 +673,6 @@ class WRF(ForecastModel):
         ----------
         data: DataFrame
             Raw forecast data
-        cloud_cover: str, default 'total_clouds'
-            The type of cloud cover used to infer the irradiance.
 
         Returns
         -------
@@ -683,5 +682,5 @@ class WRF(ForecastModel):
         data = super(WRF, self).process_data(data, **kwargs)
         data['temp_air'] = self.kelvin_to_celsius(data['temp_air'])
         data['wind_speed'] = self.uv_to_speed(data)
-        data['ghi'] = self.dni_and_dhi_to_ghi(data['dni'], data['dhi'])
+        data['ghi'] = self.dni_and_dhi_to_ghi(data['dni'], data['dhi'], data['cos_zenith'])
         return data[self.output_variables]
