@@ -3,23 +3,25 @@ The 'forecast' module contains class definitions for
 retreiving forecasted data from UNIDATA Thredd servers.
 '''
 import datetime
-from netCDF4 import num2date
+from netCDF4 import num2date, Dataset
 import numpy as np
 import pandas as pd
+import xarray as xr
 from requests.exceptions import HTTPError
 from xml.etree.ElementTree import ParseError
 
 from pvlib.location import Location
 from pvlib.irradiance import liujordan, get_extra_radiation, disc
+import wrf
 from siphon.catalog import TDSCatalog
 from siphon.ncss import NCSS
 
 import warnings
 
-warnings.warn(
-    'The forecast module algorithms and features are highly experimental. '
-    'The API may change, the functionality may be consolidated into an io '
-    'module, or the module may be separated into its own package.')
+# warnings.warn(
+#     'The forecast module algorithms and features are highly experimental. '
+#     'The API may change, the functionality may be consolidated into an io '
+#     'module, or the module may be separated into its own package.')
 
 
 class ForecastModel(object):
@@ -191,13 +193,12 @@ class ForecastModel(object):
 
         return self.data
 
-
-    def get_wrf_data(self, wrfout_file,
-                 vert_level=None, query_variables=None,
-                 close_netcdf_data=True, **kwargs):
+    def get_wrf_data(self, wrfout_file, start, end,
+                     vert_level=None, query_variables=None,
+                     close_netcdf_data=True, **kwargs):
         """
         Finds a local wrfout file and
-        converts the netcdf data to a pandas DataFrame.
+        converts the netcdf data to a xarray Dataset.
 
         Parameters
         ----------
@@ -227,13 +228,10 @@ class ForecastModel(object):
         else:
             self.query_variables = query_variables
 
+        self.netcdf_data = Dataset(wrfout_file)
 
-        self.netcdf_data = 0
-
-        # might be better to go to xarray here so that we can handle
-        # higher dimensional data for more advanced applications
-        self.data = self._netcdf2pandas(self.netcdf_data, self.query_variables,
-                                        self.start, self.end)
+        self.data = self._wrf2xarray(self.netcdf_data, self.query_variables,
+                                     start, end)
 
         if close_netcdf_data:
             self.netcdf_data.close()
@@ -275,7 +273,10 @@ class ForecastModel(object):
         data: DataFrame
             Processed forecast data
         """
-        return self.process_data(self.get_data(*args, **kwargs), **kwargs)
+        if self.model_name == 'WRF Forecast':
+            return self.process_data(self.get_wrf_data(*args, **kwargs), **kwargs)
+        else:
+            return self.process_data(self.get_data(*args, **kwargs), **kwargs)
 
     def rename(self, data, variables=None):
         """
@@ -295,6 +296,62 @@ class ForecastModel(object):
         if variables is None:
             variables = self.variables
         return data.rename(columns={y: x for x, y in variables.items()})
+
+    def _wrf2xarray(self, netcdf_data, query_variables, start, end):
+        """
+        Transforms data from netcdf to xarray Dataset.
+
+        Parameters
+        ----------
+        data: netcdf
+            Data returned from UNIDATA NCSS query, or from your local forecast.
+        query_variables: list
+            The variables requested.
+        start: Timestamp
+            The start time
+        end: Timestamp
+            The end time
+
+        Returns
+        -------
+        xarray.Dataset
+        """
+        first = True
+        for key in query_variables:
+            var = wrf.getvar(netcdf_data, key, timeidx=wrf.ALL_TIMES)
+            if first:
+                data = var
+                first = False
+            else:
+                with xr.set_options(keep_attrs=True):
+                    try:
+                        data = xr.merge([data, var])
+                    except ValueError:
+                        data = data.drop_vars('Time')
+                        data = xr.merge([data, var])
+
+        # Get global attributes from the NetCDF Dataset
+        wrfattrs_names = netcdf_data.ncattrs()
+        wrfattrs = wrf.extract_global_attrs(netcdf_data, wrfattrs_names)
+        data = data.assign_attrs(wrfattrs)
+
+        # Fix a bug in how wrfout data is read in -- attributes must be strings to be written to NetCDF
+        for var in data.data_vars:
+            try:
+                data[var].attrs['projection'] = str(data[var].attrs['projection'])
+            except KeyError:
+                pass
+
+        # Fix another bug that creates a conflict in the 'coordinates' attribute
+        for var in data.data_vars:
+            try:
+                del data[var].attrs['coordinates']
+            except KeyError:
+                pass
+
+        # Slice the dataset to only include specified time interval
+        data = data.sel(Time=slice(start, end))
+        return data
 
     def _netcdf2pandas(self, netcdf_data, query_variables, start, end):
         """
@@ -642,16 +699,16 @@ class WRF(ForecastModel):
 
     def __init__(self, set_type='best'):
         model_type = 'Forecast Model Data'
-        model = 'WRF Forecast'
+        model_name = 'WRF Forecast'
 
         self.variables = {
-            'temp_air': 'TEMP at 2 M',  # T2
-            'wind_speed_u': 'U at 10 M',  # U10
-            'wind_speed_v': 'V at 10 M',  # V10
-            'total_clouds': 'CLOUD FRACTION',  # CLDFRA
-            'cos_zenith': 'Cos of solar zenith angle',  # COSZEN
-            'dni': 'Shortwave surface downward direct normal irradiance',  # SWDDNI
-            'dhi': 'Shortwave surface downward diffuse irradiance',  # SWDDIF
+            'temp_air': 'T2',  # TEMP at 2 M
+            'wind_speed_u': 'U10',  # U at 10 M
+            'wind_speed_v': 'V10',  # V at 10 M
+            'total_clouds': 'CLDFRA',  # CLOUD FRACTION
+            'cos_zenith': 'COSZEN',  # Cos of solar zenith angle
+            'dni': 'SWDDNI',  # Shortwave surface downward direct normal irradiance
+            'dhi': 'SWDDIF',  # Shortwave surface downward diffuse irradiance
             }
 
         self.output_variables = [
@@ -662,7 +719,7 @@ class WRF(ForecastModel):
             'dhi'
             ]
 
-        super(WRF, self).__init__(model_type, model, set_type, vert_level=None)
+        super(WRF, self).__init__(model_type, model_name, set_type, vert_level=None)
 
     def process_data(self, data, **kwargs):
         """
@@ -679,7 +736,14 @@ class WRF(ForecastModel):
         data: DataFrame
             Processed forecast data.
         """
-        data = super(WRF, self).process_data(data, **kwargs)
+        # Below is the method that the other forecasts use,
+        # but is overly complex and the existing rename function doesn't apply to xarray
+        # data = super(WRF, self).process_data(data, **kwargs)
+
+        # Rename the variables (invert the self.variables list for this to work properly)
+        data = xr.Dataset.rename(data, {v: k for k, v in self.variables.items()})
+
+        # Calculate other quantities
         data['temp_air'] = self.kelvin_to_celsius(data['temp_air'])
         data['wind_speed'] = self.uv_to_speed(data)
         data['ghi'] = self.dni_and_dhi_to_ghi(data['dni'], data['dhi'], data['cos_zenith'])
