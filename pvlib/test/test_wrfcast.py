@@ -8,7 +8,7 @@ from pvlib.wrfcast import WRF
 
 # Below are the testing parameters... they may be flexible
 wrfout = os.path.join(
-    '/Users/swardy9230/Box Sync/01_Research/01_Renewable_Analysis/',
+    '/Users/jsward/Box Sync/01_Research/01_Renewable_Analysis/',
     'Wind Resource Analysis/wrfout/19mp4lw4sw7lsm8pbl99cu',
     'wrfout_d02_2011-07-17')
 start = 'July 17 2011'
