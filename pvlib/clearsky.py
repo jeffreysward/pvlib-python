@@ -9,6 +9,9 @@ import calendar
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import minimize_scalar
+from scipy.linalg import hankel
+import h5py
 
 from pvlib import atmosphere, tools
 
@@ -64,23 +67,23 @@ def ineichen(apparent_zenith, airmass_absolute, linke_turbidity,
 
     References
     ----------
-    [1] P. Ineichen and R. Perez, "A New airmass independent formulation for
-        the Linke turbidity coefficient", Solar Energy, vol 73, pp. 151-157,
-        2002.
+    .. [1] P. Ineichen and R. Perez, "A New airmass independent formulation for
+       the Linke turbidity coefficient", Solar Energy, vol 73, pp. 151-157,
+       2002.
 
-    [2] R. Perez et. al., "A New Operational Model for Satellite-Derived
-        Irradiances: Description and Validation", Solar Energy, vol 73, pp.
-        307-317, 2002.
+    .. [2] R. Perez et. al., "A New Operational Model for Satellite-Derived
+       Irradiances: Description and Validation", Solar Energy, vol 73, pp.
+       307-317, 2002.
 
-    [3] M. Reno, C. Hansen, and J. Stein, "Global Horizontal Irradiance Clear
-        Sky Models: Implementation and Analysis", Sandia National
-        Laboratories, SAND2012-2389, 2012.
+    .. [3] M. Reno, C. Hansen, and J. Stein, "Global Horizontal Irradiance
+       Clear Sky Models: Implementation and Analysis", Sandia National
+       Laboratories, SAND2012-2389, 2012.
 
-    [4] http://www.soda-is.com/eng/services/climat_free_eng.php#c5 (obtained
-        July 17, 2012).
+    .. [4] http://www.soda-is.com/eng/services/climat_free_eng.php#c5 (obtained
+       July 17, 2012).
 
-    [5] J. Remund, et. al., "Worldwide Linke Turbidity Information", Proc.
-        ISES Solar World Congress, June 2003. Goteborg, Sweden.
+    .. [5] J. Remund, et. al., "Worldwide Linke Turbidity Information", Proc.
+       ISES Solar World Congress, June 2003. Goteborg, Sweden.
     '''
 
     # ghi is calculated using either the equations in [1] by setting
@@ -184,13 +187,6 @@ def lookup_linke_turbidity(time, latitude, longitude, filepath=None,
     # 1st row: 89.9583 S, 2nd row: 89.875 S
     # 1st column: 179.9583 W, 2nd column: 179.875 W
 
-    try:
-        import tables
-    except ImportError:
-        raise ImportError('The Linke turbidity lookup table requires tables. '
-                          'You can still use clearsky.ineichen if you '
-                          'supply your own turbidities.')
-
     if filepath is None:
         pvlib_path = os.path.dirname(os.path.abspath(__file__))
         filepath = os.path.join(pvlib_path, 'data', 'LinkeTurbidities.h5')
@@ -198,9 +194,8 @@ def lookup_linke_turbidity(time, latitude, longitude, filepath=None,
     latitude_index = _degrees_to_index(latitude, coordinate='latitude')
     longitude_index = _degrees_to_index(longitude, coordinate='longitude')
 
-    with tables.open_file(filepath) as lt_h5_file:
-        lts = lt_h5_file.root.LinkeTurbidity[latitude_index,
-                                             longitude_index, :]
+    with h5py.File(filepath, 'r') as lt_h5_file:
+        lts = lt_h5_file['LinkeTurbidity'][latitude_index, longitude_index]
 
     if interp_turbidity:
         linke_turbidity = _interpolate_turbidity(lts, time)
@@ -377,15 +372,15 @@ def haurwitz(apparent_zenith):
     References
     ----------
 
-    [1] B. Haurwitz, "Insolation in Relation to Cloudiness and Cloud
-     Density," Journal of Meteorology, vol. 2, pp. 154-166, 1945.
+    .. [1] B. Haurwitz, "Insolation in Relation to Cloudiness and Cloud
+       Density," Journal of Meteorology, vol. 2, pp. 154-166, 1945.
 
-    [2] B. Haurwitz, "Insolation in Relation to Cloud Type," Journal of
-     Meteorology, vol. 3, pp. 123-124, 1946.
+    .. [2] B. Haurwitz, "Insolation in Relation to Cloud Type," Journal of
+       Meteorology, vol. 3, pp. 123-124, 1946.
 
-    [3] M. Reno, C. Hansen, and J. Stein, "Global Horizontal Irradiance Clear
-     Sky Models: Implementation and Analysis", Sandia National
-     Laboratories, SAND2012-2389, 2012.
+    .. [3] M. Reno, C. Hansen, and J. Stein, "Global Horizontal Irradiance
+       Clear Sky Models: Implementation and Analysis", Sandia National
+       Laboratories, SAND2012-2389, 2012.
     '''
 
     cos_zenith = tools.cosd(apparent_zenith.values)
@@ -405,7 +400,7 @@ def simplified_solis(apparent_elevation, aod700=0.1, precipitable_water=1.,
                      pressure=101325., dni_extra=1364.):
     """
     Calculate the clear sky GHI, DNI, and DHI according to the
-    simplified Solis model [1]_.
+    simplified Solis model.
 
     Reference [1]_ describes the accuracy of the model as being 15, 20,
     and 18 W/m^2 for the beam, global, and diffuse components. Reference
@@ -597,14 +592,145 @@ def _calc_d(aod700, p):
     return d
 
 
-def detect_clearsky(measured, clearsky, times, window_length,
+def _calc_stats(data, samples_per_window, sample_interval, H):
+    """ Calculates statistics for each window, used by Reno-style clear
+    sky detection functions. Does not return the line length statistic
+    which is provided by _calc_windowed_stat and _line_length.
+
+    Calculations are done on a sliding window defined by the Hankel matrix H.
+    Columns in H define the indices for each window. Each window contains
+    samples_per_window index values. The first window starts with index 0;
+    the last window ends at the last index position in data.
+
+    In the calculation of data_slope_nstd, a choice is made here where [1]_ is
+    ambiguous. data_slope_nstd is the standard deviation of slopes divided by
+    the mean GHI for each interval; see [1]_ Eq. 11. For intervals containing
+    e.g. 10 values, there are 9 slope values in the standard deviation, and the
+    mean is calculated using all 10 values. Eq. 11 in [1]_ is ambiguous if
+    the mean should be calculated using 9 points (left ends of each slope)
+    or all 10 points.
+
+    Parameters
+    ----------
+    data : Series
+    samples_per_window : int
+        Number of data points in each window
+    sample_interval : float
+        Time in minutes in each sample interval
+    H : 2D ndarray
+        Hankel matrix defining the indices for each window.
+
+    Returns
+    -------
+    data_mean : Series
+        mean of data in each window
+    data_max : Series
+        maximum of data in each window
+    data_slope_nstd : Series
+        standard deviation of difference between data points in each window
+    data_slope : Series
+        difference between successive data points
+
+    References
+    ----------
+    .. [1] Reno, M.J. and C.W. Hansen, "Identification of periods of clear
+       sky irradiance in time series of GHI measurements" Renewable Energy,
+       v90, p. 520-531, 2016.
+    """
+
+    data_mean = data.values[H].mean(axis=0)
+    data_mean = _to_centered_series(data_mean, data.index, samples_per_window)
+    data_max = data.values[H].max(axis=0)
+    data_max = _to_centered_series(data_max, data.index, samples_per_window)
+    # shift to get forward difference, .diff() is backward difference instead
+    data_diff = data.diff().shift(-1)
+    data_slope = data_diff / sample_interval
+    data_slope_nstd = _slope_nstd_windowed(data_slope.values[:-1], data, H,
+                                           samples_per_window, sample_interval)
+    data_slope_nstd = data_slope_nstd
+
+    return data_mean, data_max, data_slope_nstd, data_slope
+
+
+def _slope_nstd_windowed(slopes, data, H, samples_per_window, sample_interval):
+    with np.errstate(divide='ignore', invalid='ignore'):
+        nstd = slopes[H[:-1, ]].std(ddof=1, axis=0) \
+            / data.values[H].mean(axis=0)
+    return _to_centered_series(nstd, data.index, samples_per_window)
+
+
+def _max_diff_windowed(data, H, samples_per_window):
+    raw = np.diff(data)
+    raw = np.abs(raw[H[:-1, ]]).max(axis=0)
+    return _to_centered_series(raw, data.index, samples_per_window)
+
+
+def _line_length_windowed(data, H, samples_per_window,
+                          sample_interval):
+    raw = np.sqrt(np.diff(data)**2. + sample_interval**2.)
+    raw = np.sum(raw[H[:-1, ]], axis=0)
+    return _to_centered_series(raw, data.index, samples_per_window)
+
+
+def _to_centered_series(vals, idx, samples_per_window):
+    vals = np.pad(vals, ((0, len(idx) - len(vals)),), mode='constant',
+                  constant_values=np.nan)
+    shift = samples_per_window // 2  # align = 'center' only
+    return pd.Series(index=idx, data=vals).shift(shift)
+
+
+def _get_sample_intervals(times, win_length):
+    """ Calculates time interval and samples per window for Reno-style clear
+    sky detection functions
+    """
+    deltas = np.diff(times.values) / np.timedelta64(1, '60s')
+
+    # determine if we can proceed
+    if times.inferred_freq and len(np.unique(deltas)) == 1:
+        sample_interval = times[1] - times[0]
+        sample_interval = sample_interval.seconds / 60  # in minutes
+        samples_per_window = int(win_length / sample_interval)
+        return sample_interval, samples_per_window
+    else:
+        raise NotImplementedError('algorithm does not yet support unequal '
+                                  'times. consider resampling your data.')
+
+
+def _clear_sample_index(clear_windows, samples_per_window, align, H):
+    """
+    Returns indices of clear samples in clear windows
+    """
+    # H contains indices for each window, e.g. indices for the first window
+    # are in first column of H.
+    # clear_windows contains one boolean for each window and is aligned
+    # by 'align', default to center
+    # shift clear_windows.index to be aligned left (e.g. first value in the
+    # left-most position) to line up with the first column of H.
+
+    # commented if/else block for future align='left', 'right' capability
+    # if align == 'right':
+    #     shift = 1 - samples_per_window
+    # elif align == 'center':
+    #     shift = - (samples_per_window // 2)
+    # else:
+    #     shift = 0
+    shift = -(samples_per_window // 2)
+    idx = clear_windows.shift(shift)
+    # drop rows at the end corresponding to windows past the end of data
+    idx = idx.drop(clear_windows.index[1 - samples_per_window:])
+    idx = idx.astype(bool)  # shift changed type to object
+    clear_samples = np.unique(H[:, idx])
+    return clear_samples
+
+
+def detect_clearsky(measured, clearsky, times=None, window_length=10,
                     mean_diff=75, max_diff=75,
                     lower_line_length=-5, upper_line_length=10,
                     var_diff=0.005, slope_dev=8, max_iterations=20,
                     return_components=False):
     """
     Detects clear sky times according to the algorithm developed by Reno
-    and Hansen for GHI measurements [1]. The algorithm was designed and
+    and Hansen for GHI measurements. The algorithm [1]_ was designed and
     validated for analyzing GHI time series only. Users may attempt to
     apply it to other types of time series data using different filter
     settings, but should be skeptical of the results.
@@ -623,24 +749,25 @@ def detect_clearsky(measured, clearsky, times, window_length,
     Parameters
     ----------
     measured : array or Series
-        Time series of measured values.
+        Time series of measured GHI. [W/m2]
     clearsky : array or Series
-        Time series of the expected clearsky values.
-    times : DatetimeIndex
-        Times of measured and clearsky values.
-    window_length : int
+        Time series of the expected clearsky GHI. [W/m2]
+    times : DatetimeIndex or None, default None.
+        Times of measured and clearsky values. If None the index of measured
+        will be used.
+    window_length : int, default 10
         Length of sliding time window in minutes. Must be greater than 2
         periods.
     mean_diff : float, default 75
         Threshold value for agreement between mean values of measured
-        and clearsky in each interval, see Eq. 6 in [1].
+        and clearsky in each interval, see Eq. 6 in [1]. [W/m2]
     max_diff : float, default 75
         Threshold value for agreement between maxima of measured and
-        clearsky values in each interval, see Eq. 7 in [1].
+        clearsky values in each interval, see Eq. 7 in [1]. [W/m2]
     lower_line_length : float, default -5
         Lower limit of line length criterion from Eq. 8 in [1].
-        Criterion satisfied when
-        lower_line_length < line length difference < upper_line_length
+        Criterion satisfied when lower_line_length < line length difference
+        < upper_line_length.
     upper_line_length : float, default 10
         Upper limit of line length criterion from Eq. 8 in [1].
     var_diff : float, default 0.005
@@ -671,11 +798,18 @@ def detect_clearsky(measured, clearsky, times, window_length,
         detected clear_samples. Only provided if return_components is
         True.
 
+    Raises
+    ------
+    ValueError
+        If measured is not a Series and times is not provided
+    NotImplementedError
+        If timestamps are not equally spaced
+
     References
     ----------
-    [1] Reno, M.J. and C.W. Hansen, "Identification of periods of clear
-    sky irradiance in time series of GHI measurements" Renewable Energy,
-    v90, p. 520-531, 2016.
+    .. [1] Reno, M.J. and C.W. Hansen, "Identification of periods of clear
+       sky irradiance in time series of GHI measurements" Renewable Energy,
+       v90, p. 520-531, 2016.
 
     Notes
     -----
@@ -692,72 +826,81 @@ def detect_clearsky(measured, clearsky, times, window_length,
         * parameters are controllable via keyword arguments
         * option to return individual test components and clearsky scaling
           parameter
+        * uses centered windows (Matlab function uses left-aligned windows)
     """
 
-    # calculate deltas in units of minutes (matches input window_length units)
-    deltas = np.diff(times.values) / np.timedelta64(1, '60s')
+    if times is None:
+        try:
+            times = measured.index
+        except AttributeError:
+            raise ValueError("times is required when measured is not a Series")
 
-    # determine the unique deltas and if we can proceed
-    unique_deltas = np.unique(deltas)
-    if len(unique_deltas) == 1:
-        sample_interval = unique_deltas[0]
+    # be polite about returning the same type as was input
+    ispandas = isinstance(measured, pd.Series)
+
+    # for internal use, need a Series
+    if not ispandas:
+        meas = pd.Series(measured, index=times)
     else:
-        raise NotImplementedError('algorithm does not yet support unequal '
-                                  'times. consider resampling your data.')
+        meas = measured
 
-    intervals_per_window = int(window_length / sample_interval)
+    if not isinstance(clearsky, pd.Series):
+        clear = pd.Series(clearsky, index=times)
+    else:
+        clear = clearsky
+
+    sample_interval, samples_per_window = _get_sample_intervals(times,
+                                                                window_length)
 
     # generate matrix of integers for creating windows with indexing
-    from scipy.linalg import hankel
-    H = hankel(np.arange(intervals_per_window),                   # noqa: N806
-               np.arange(intervals_per_window - 1, len(times)))
+    H = hankel(np.arange(samples_per_window),
+               np.arange(samples_per_window-1, len(times)))
 
     # calculate measurement statistics
-    meas_mean = np.mean(measured[H], axis=0)
-    meas_max = np.max(measured[H], axis=0)
-    meas_diff = np.diff(measured[H], n=1, axis=0)
-    meas_slope = np.diff(measured[H], n=1, axis=0) / sample_interval
-    # matlab std function normalizes by N-1, so set ddof=1 here
-    meas_slope_nstd = np.std(meas_slope, axis=0, ddof=1) / meas_mean
-    meas_line_length = np.sum(np.sqrt(
-        meas_diff * meas_diff +
-        sample_interval * sample_interval), axis=0)
+    meas_mean, meas_max, meas_slope_nstd, meas_slope = _calc_stats(
+        meas, samples_per_window, sample_interval, H)
+    meas_line_length = _line_length_windowed(
+        meas, H, samples_per_window, sample_interval)
 
     # calculate clear sky statistics
-    clear_mean = np.mean(clearsky[H], axis=0)
-    clear_max = np.max(clearsky[H], axis=0)
-    clear_diff = np.diff(clearsky[H], n=1, axis=0)
-    clear_slope = np.diff(clearsky[H], n=1, axis=0) / sample_interval
+    clear_mean, clear_max, _, clear_slope = _calc_stats(
+        clear, samples_per_window, sample_interval, H)
 
-    from scipy.optimize import minimize_scalar
-
+    # find a scaling factor for the clear sky time series that minimizes the
+    # RMSE between the clear times identified in the measured data and the
+    # scaled clear sky time series. Optimization to determine the scaling
+    # factor considers all identified clear times, which is different from [1]
+    # where the scaling factor was determined from clear times on days with
+    # at least 50% of the day being identified as clear.
     alpha = 1
     for iteration in range(max_iterations):
-        clear_line_length = np.sum(np.sqrt(
-            alpha * alpha * clear_diff * clear_diff +
-            sample_interval * sample_interval), axis=0)
+        scaled_clear = alpha * clear
+        clear_line_length = _line_length_windowed(
+            scaled_clear, H, samples_per_window, sample_interval)
 
         line_diff = meas_line_length - clear_line_length
-
+        slope_max_diff = _max_diff_windowed(
+            meas - scaled_clear, H, samples_per_window)
         # evaluate comparison criteria
         c1 = np.abs(meas_mean - alpha*clear_mean) < mean_diff
         c2 = np.abs(meas_max - alpha*clear_max) < max_diff
         c3 = (line_diff > lower_line_length) & (line_diff < upper_line_length)
         c4 = meas_slope_nstd < var_diff
-        c5 = np.max(np.abs(meas_slope -
-                           alpha * clear_slope), axis=0) < slope_dev
+        c5 = slope_max_diff < slope_dev
         c6 = (clear_mean != 0) & ~np.isnan(clear_mean)
         clear_windows = c1 & c2 & c3 & c4 & c5 & c6
 
         # create array to return
-        clear_samples = np.full_like(measured, False, dtype='bool')
+        clear_samples = np.full_like(meas, False, dtype='bool')
         # find the samples contained in any window classified as clear
-        clear_samples[np.unique(H[:, clear_windows])] = True
+        idx = _clear_sample_index(clear_windows, samples_per_window, 'center',
+                                  H)
+        clear_samples[idx] = True
 
         # find a new alpha
         previous_alpha = alpha
-        clear_meas = measured[clear_samples]
-        clear_clear = clearsky[clear_samples]
+        clear_meas = meas[clear_samples]
+        clear_clear = clear[clear_samples]
 
         def rmse(alpha):
             return np.sqrt(np.mean((clear_meas - alpha*clear_clear)**2))
@@ -767,11 +910,11 @@ def detect_clearsky(measured, clearsky, times, window_length,
             break
     else:
         import warnings
-        warnings.warn('failed to converge after %s iterations'
+        warnings.warn('rescaling failed to converge after %s iterations'
                       % max_iterations, RuntimeWarning)
 
     # be polite about returning the same type as was input
-    if isinstance(measured, pd.Series):
+    if ispandas:
         clear_samples = pd.Series(clear_samples, index=times)
 
     if return_components:
@@ -788,8 +931,7 @@ def detect_clearsky(measured, clearsky, times, window_length,
         components['max_diff'] = np.abs(meas_max - alpha * clear_max)
         components['line_length'] = meas_line_length - clear_line_length
         components['slope_nstd'] = meas_slope_nstd
-        components['slope_max'] = (np.max(
-            meas_slope - alpha * clear_slope, axis=0))
+        components['slope_max'] = slope_max_diff
 
         return clear_samples, components, alpha
     else:
@@ -849,22 +991,26 @@ def bird(zenith, airmass_relative, aod380, aod500, precipitable_water,
     See also
     --------
     pvlib.atmosphere.bird_hulstrom80_aod_bb
-    pvlib.atmosphere.relativeairmass
+    pvlib.atmosphere.get_relative_airmass
 
     References
     ----------
-    [1] R. E. Bird and R. L Hulstrom, "A Simplified Clear Sky model for Direct
-    and Diffuse Insolation on Horizontal Surfaces" SERI Technical Report
-    SERI/TR-642-761, Feb 1981. Solar Energy Research Institute, Golden, CO.
+    .. [1] R. E. Bird and R. L Hulstrom, "A Simplified Clear Sky model for
+       Direct and Diffuse Insolation on Horizontal Surfaces" SERI Technical
+       Report SERI/TR-642-761, Feb 1981. Solar Energy Research Institute,
+       Golden, CO.
 
-    [2] Daryl R. Myers, "Solar Radiation: Practical Modeling for Renewable
-    Energy Applications", pp. 46-51 CRC Press (2013)
+    .. [2] Daryl R. Myers, "Solar Radiation: Practical Modeling for Renewable
+       Energy Applications", pp. 46-51 CRC Press (2013)
 
-    `NREL Bird Clear Sky Model <http://rredc.nrel.gov/solar/models/clearsky/>`_
+    .. [3] `NREL Bird Clear Sky Model <http://rredc.nrel.gov/solar/models/
+       clearsky/>`_
 
-    `SERI/TR-642-761 <http://rredc.nrel.gov/solar/pubs/pdfs/tr-642-761.pdf>`_
+    .. [4] `SERI/TR-642-761 <http://rredc.nrel.gov/solar/pubs/pdfs/
+       tr-642-761.pdf>`_
 
-    `Error Reports <http://rredc.nrel.gov/solar/models/clearsky/error_reports.html>`_
+    .. [5] `Error Reports <http://rredc.nrel.gov/solar/models/clearsky/
+       error_reports.html>`_
     """
     etr = dni_extra  # extraradiation
     ze_rad = np.deg2rad(zenith)  # zenith in radians

@@ -2,7 +2,6 @@
 The 'forecast' module contains class definitions for
 retreiving forecasted data from UNIDATA Thredd servers.
 '''
-import datetime
 from netCDF4 import num2date
 import numpy as np
 import pandas as pd
@@ -10,11 +9,13 @@ from requests.exceptions import HTTPError
 from xml.etree.ElementTree import ParseError
 
 from pvlib.location import Location
-from pvlib.irradiance import liujordan, get_extra_radiation, disc
+from pvlib.irradiance import campbell_norman, get_extra_radiation, disc
+from pvlib.irradiance import _liujordan
 from siphon.catalog import TDSCatalog
 from siphon.ncss import NCSS
 
 import warnings
+
 
 warnings.warn(
     'The forecast module algorithms and features are highly experimental. '
@@ -22,7 +23,7 @@ warnings.warn(
     'module, or the module may be separated into its own package.')
 
 
-class ForecastModel(object):
+class ForecastModel:
     """
     An object for querying and holding forecast model information for
     use within the pvlib library.
@@ -144,7 +145,7 @@ class ForecastModel(object):
         self.connected = True
 
     def __repr__(self):
-        return '{}, {}'.format(self.model_name, self.set_type)
+        return f'{self.model_name}, {self.set_type}'
 
     def set_dataset(self):
         '''
@@ -165,6 +166,30 @@ class ForecastModel(object):
         self.ncss = NCSS(self.access_url)
         self.query = self.ncss.query()
 
+    def set_query_time_range(self, start, end):
+        """
+        Parameters
+        ----------
+        start : datetime.datetime, pandas.Timestamp
+            Must be tz-localized.
+        end : datetime.datetime, pandas.Timestamp
+            Must be tz-localized.
+
+        Notes
+        -----
+        Assigns ``self.start``, ``self.end``. Modifies ``self.query``
+        """
+        self.start = pd.Timestamp(start)
+        self.end = pd.Timestamp(end)
+        if self.start.tz is None or self.end.tz is None:
+            raise TypeError('start and end must be tz-localized')
+        # don't assume that siphon or the server can handle anything other
+        # than UTC
+        self.query.time_range(
+            self.start.tz_convert('UTC'),
+            self.end.tz_convert('UTC')
+        )
+
     def set_query_latlon(self):
         '''
         Sets the NCSS query location latitude and longitude.
@@ -180,24 +205,24 @@ class ForecastModel(object):
             self.lbox = False
             self.query.lonlat_point(self.longitude, self.latitude)
 
-    def set_location(self, time, latitude, longitude):
+    def set_location(self, tz, latitude, longitude):
         '''
         Sets the location for the query.
 
         Parameters
         ----------
-        time: datetime or DatetimeIndex
-            Time range of the query.
-        '''
-        if isinstance(time, datetime.datetime):
-            tzinfo = time.tzinfo
-        else:
-            tzinfo = time.tz
+        tz: tzinfo
+            Timezone of the query
+        latitude: float
+            Latitude of the query
+        longitude: float
+            Longitude of the query
 
-        if tzinfo is None:
-            self.location = Location(latitude, longitude)
-        else:
-            self.location = Location(latitude, longitude, tz=tzinfo)
+        Notes
+        -----
+        Assigns ``self.location``.
+        '''
+        self.location = Location(latitude, longitude, tz=tz)
 
     def get_data(self, latitude, longitude, start, end,
                  vert_level=None, query_variables=None,
@@ -243,14 +268,12 @@ class ForecastModel(object):
         else:
             self.query_variables = query_variables
 
+        self.set_query_time_range(start, end)
+
         self.latitude = latitude
         self.longitude = longitude
         self.set_query_latlon()  # modifies self.query
-        self.set_location(start, latitude, longitude)
-
-        self.start = start
-        self.end = end
-        self.query.time_range(self.start, self.end)
+        self.set_location(self.start.tz, latitude, longitude)
 
         if self.vert_level is not None:
             self.query.vertical_level(self.vert_level)
@@ -360,6 +383,11 @@ class ForecastModel(object):
             if key not in query_variables:
                 continue
             squeezed = data[:].squeeze()
+
+            # If the data is big endian, swap the byte order to make it
+            # little endian
+            if squeezed.dtype.byteorder == '>':
+                squeezed = squeezed.byteswap().newbyteorder()
             if squeezed.ndim == 1:
                 data_dict[key] = squeezed
             elif squeezed.ndim == 2:
@@ -389,8 +417,14 @@ class ForecastModel(object):
         -------
         pandas.DatetimeIndex
         '''
-        times = num2date(time[:].squeeze(), time.units)
-        self.time = pd.DatetimeIndex(pd.Series(times), tz=self.location.tz)
+        # np.masked_array with elements like real_datetime(2021, 8, 17, 16, 0)
+        # and dtype=object
+        times = num2date(time[:].squeeze(), time.units,
+                         only_use_cftime_datetimes=False,
+                         only_use_python_datetimes=True)
+        # convert to pandas, localize to UTC, convert to desired timezone
+        self.time = pd.DatetimeIndex(
+            times, tz='UTC').tz_convert(self.location.tz)
 
     def cloud_cover_to_ghi_linear(self, cloud_cover, ghi_clear, offset=35,
                                   **kwargs):
@@ -503,14 +537,14 @@ class ForecastModel(object):
 
         return transmittance
 
-    def cloud_cover_to_irradiance_liujordan(self, cloud_cover, **kwargs):
+    def cloud_cover_to_irradiance_campbell_norman(self, cloud_cover, **kwargs):
         """
         Estimates irradiance from cloud cover in the following steps:
 
         1. Determine transmittance using a function of cloud cover e.g.
            :py:meth:`~ForecastModel.cloud_cover_to_transmittance_linear`
         2. Calculate GHI, DNI, DHI using the
-           :py:func:`pvlib.irradiance.liujordan` model
+           :py:func:`pvlib.irradiance.campbell_norman` model
 
         Parameters
         ----------
@@ -526,14 +560,12 @@ class ForecastModel(object):
         # accurate enough to justify using these minor corrections
         solar_position = self.location.get_solarposition(cloud_cover.index)
         dni_extra = get_extra_radiation(cloud_cover.index)
-        airmass = self.location.get_airmass(cloud_cover.index)
 
         transmittance = self.cloud_cover_to_transmittance_linear(cloud_cover,
                                                                  **kwargs)
 
-        irrads = liujordan(solar_position['apparent_zenith'],
-                           transmittance, airmass['airmass_absolute'],
-                           dni_extra=dni_extra)
+        irrads = campbell_norman(solar_position['apparent_zenith'],
+                                 transmittance, dni_extra=dni_extra)
         irrads = irrads.fillna(0)
 
         return irrads
@@ -548,7 +580,8 @@ class ForecastModel(object):
         cloud_cover : Series
         how : str, default 'clearsky_scaling'
             Selects the method for conversion. Can be one of
-            clearsky_scaling or liujordan.
+            clearsky_scaling or campbell_norman. Method liujordan is
+            deprecated.
         **kwargs
             Passed to the selected method.
 
@@ -562,8 +595,8 @@ class ForecastModel(object):
         if how == 'clearsky_scaling':
             irrads = self.cloud_cover_to_irradiance_clearsky_scaling(
                 cloud_cover, **kwargs)
-        elif how == 'liujordan':
-            irrads = self.cloud_cover_to_irradiance_liujordan(
+        elif how == 'campbell_norman':
+            irrads = self.cloud_cover_to_irradiance_campbell_norman(
                 cloud_cover, **kwargs)
         else:
             raise ValueError('invalid how argument')
@@ -687,9 +720,9 @@ class GFS(ForecastModel):
 
         resolution = resolution.title()
         if resolution not in self._resolutions:
-            raise ValueError('resolution must in {}'.format(self._resolutions))
+            raise ValueError(f'resolution must in {self._resolutions}')
 
-        model = 'GFS {} Degree Forecast'.format(resolution)
+        model = f'GFS {resolution} Degree Forecast'
 
         # isobaric variables will require a vert_level to prevent
         # excessive data downloads
@@ -701,11 +734,11 @@ class GFS(ForecastModel):
             'total_clouds':
                 'Total_cloud_cover_entire_atmosphere_Mixed_intervals_Average',
             'low_clouds':
-                'Total_cloud_cover_low_cloud_Mixed_intervals_Average',
+                'Low_cloud_cover_low_cloud_Mixed_intervals_Average',
             'mid_clouds':
-                'Total_cloud_cover_middle_cloud_Mixed_intervals_Average',
+                'Medium_cloud_cover_middle_cloud_Mixed_intervals_Average',
             'high_clouds':
-                'Total_cloud_cover_high_cloud_Mixed_intervals_Average',
+                'High_cloud_cover_high_cloud_Mixed_intervals_Average',
             'boundary_clouds': ('Total_cloud_cover_boundary_layer_cloud_'
                                 'Mixed_intervals_Average'),
             'convect_clouds': 'Total_cloud_cover_convective_cloud',
@@ -723,7 +756,7 @@ class GFS(ForecastModel):
             'mid_clouds',
             'high_clouds']
 
-        super(GFS, self).__init__(model_type, model, set_type,
+        super().__init__(model_type, model, set_type,
                                   vert_level=100000)
 
     def process_data(self, data, cloud_cover='total_clouds', **kwargs):
@@ -743,7 +776,7 @@ class GFS(ForecastModel):
         data: DataFrame
             Processed forecast data.
         """
-        data = super(GFS, self).process_data(data, **kwargs)
+        data = super().process_data(data, **kwargs)
         data['temp_air'] = self.kelvin_to_celsius(data['temp_air'])
         data['wind_speed'] = self.uv_to_speed(data)
         irrads = self.cloud_cover_to_irradiance(data[cloud_cover], **kwargs)
@@ -812,7 +845,7 @@ class HRRR_ESRL(ForecastModel):                                 # noqa: N801
             'mid_clouds',
             'high_clouds']
 
-        super(HRRR_ESRL, self).__init__(model_type, model, set_type)
+        super().__init__(model_type, model, set_type)
 
     def process_data(self, data, cloud_cover='total_clouds', **kwargs):
         """
@@ -832,7 +865,7 @@ class HRRR_ESRL(ForecastModel):                                 # noqa: N801
             Processed forecast data.
         """
 
-        data = super(HRRR_ESRL, self).process_data(data, **kwargs)
+        data = super().process_data(data, **kwargs)
         data['temp_air'] = self.kelvin_to_celsius(data['temp_air'])
         data['wind_speed'] = self.gust_to_speed(data)
         # data['wind_speed'] = self.uv_to_speed(data)  # GH 702
@@ -894,7 +927,7 @@ class NAM(ForecastModel):
             'mid_clouds',
             'high_clouds']
 
-        super(NAM, self).__init__(model_type, model, set_type)
+        super().__init__(model_type, model, set_type)
 
     def process_data(self, data, cloud_cover='total_clouds', **kwargs):
         """
@@ -914,7 +947,7 @@ class NAM(ForecastModel):
             Processed forecast data.
         """
 
-        data = super(NAM, self).process_data(data, **kwargs)
+        data = super().process_data(data, **kwargs)
         data['temp_air'] = self.kelvin_to_celsius(data['temp_air'])
         data['wind_speed'] = self.gust_to_speed(data)
         irrads = self.cloud_cover_to_irradiance(data[cloud_cover], **kwargs)
@@ -953,7 +986,7 @@ class HRRR(ForecastModel):
 
     def __init__(self, set_type='best'):
         model_type = 'Forecast Model Data'
-        model = 'NCEP HRRR CONUS 2.5km'
+        model = 'HRRR CONUS 2.5km Forecasts'
 
         self.variables = {
             'temp_air': 'Temperature_height_above_ground',
@@ -977,7 +1010,7 @@ class HRRR(ForecastModel):
             'mid_clouds',
             'high_clouds', ]
 
-        super(HRRR, self).__init__(model_type, model, set_type)
+        super().__init__(model_type, model, set_type)
 
     def process_data(self, data, cloud_cover='total_clouds', **kwargs):
         """
@@ -996,7 +1029,7 @@ class HRRR(ForecastModel):
         data: DataFrame
             Processed forecast data.
         """
-        data = super(HRRR, self).process_data(data, **kwargs)
+        data = super().process_data(data, **kwargs)
         wind_mapping = {
             'wind_speed_u': 'u-component_of_wind_height_above_ground_0',
             'wind_speed_v': 'v-component_of_wind_height_above_ground_0',
@@ -1052,7 +1085,7 @@ class NDFD(ForecastModel):
             'dni',
             'dhi',
             'total_clouds', ]
-        super(NDFD, self).__init__(model_type, model, set_type)
+        super().__init__(model_type, model, set_type)
 
     def process_data(self, data, **kwargs):
         """
@@ -1071,7 +1104,7 @@ class NDFD(ForecastModel):
         """
 
         cloud_cover = 'total_clouds'
-        data = super(NDFD, self).process_data(data, **kwargs)
+        data = super().process_data(data, **kwargs)
         data['temp_air'] = self.kelvin_to_celsius(data['temp_air'])
         irrads = self.cloud_cover_to_irradiance(data[cloud_cover], **kwargs)
         data = data.join(irrads, how='outer')
@@ -1114,10 +1147,10 @@ class RAP(ForecastModel):
 
         resolution = str(resolution)
         if resolution not in self._resolutions:
-            raise ValueError('resolution must in {}'.format(self._resolutions))
+            raise ValueError(f'resolution must in {self._resolutions}')
 
         model_type = 'Forecast Model Data'
-        model = 'Rapid Refresh CONUS {}km'.format(resolution)
+        model = f'Rapid Refresh CONUS {resolution}km'
         self.variables = {
             'temp_air': 'Temperature_surface',
             'wind_speed_gust': 'Wind_speed_gust_surface',
@@ -1135,7 +1168,7 @@ class RAP(ForecastModel):
             'low_clouds',
             'mid_clouds',
             'high_clouds', ]
-        super(RAP, self).__init__(model_type, model, set_type)
+        super().__init__(model_type, model, set_type)
 
     def process_data(self, data, cloud_cover='total_clouds', **kwargs):
         """
@@ -1155,7 +1188,7 @@ class RAP(ForecastModel):
             Processed forecast data.
         """
 
-        data = super(RAP, self).process_data(data, **kwargs)
+        data = super().process_data(data, **kwargs)
         data['temp_air'] = self.kelvin_to_celsius(data['temp_air'])
         data['wind_speed'] = self.gust_to_speed(data)
         irrads = self.cloud_cover_to_irradiance(data[cloud_cover], **kwargs)

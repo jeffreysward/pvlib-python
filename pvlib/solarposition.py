@@ -21,11 +21,11 @@ except ImportError:
 import numpy as np
 import pandas as pd
 import xarray as xr
+import scipy.optimize as so
 import warnings
 
 from pvlib import atmosphere
 from pvlib.tools import datetime_to_djd, djd_to_datetime
-from pvlib._deprecation import deprecated
 
 
 NS_PER_HR = 1.e9 * 3600.  # nanoseconds per hour
@@ -41,9 +41,15 @@ def get_solarposition(time, latitude, longitude,
     Parameters
     ----------
     time : pandas.DatetimeIndex
+        Must be localized or UTC will be assumed.
 
     latitude : float
+        Latitude in decimal degrees. Positive north of equator, negative
+        to south.
+
     longitude : float
+        Longitude in decimal degrees. Positive east of prime meridian,
+        negative to west.
 
     altitude : None or float, default None
         If None, computed from pressure. Assumed to be 0 m
@@ -70,17 +76,20 @@ def get_solarposition(time, latitude, longitude,
     temperature : float, default 12
         Degrees C.
 
-    Other keywords are passed to the underlying solar position function.
+    kwargs
+        Other keywords are passed to the solar position function
+        specified by the ``method`` argument.
 
     References
     ----------
-    [1] I. Reda and A. Andreas, Solar position algorithm for solar radiation
-    applications. Solar Energy, vol. 76, no. 5, pp. 577-589, 2004.
+    .. [1] I. Reda and A. Andreas, Solar position algorithm for solar radiation
+       applications. Solar Energy, vol. 76, no. 5, pp. 577-589, 2004.
 
-    [2] I. Reda and A. Andreas, Corrigendum to Solar position algorithm for
-    solar radiation applications. Solar Energy, vol. 81, no. 6, p. 838, 2007.
+    .. [2] I. Reda and A. Andreas, Corrigendum to Solar position algorithm for
+       solar radiation applications. Solar Energy, vol. 81, no. 6, p. 838,
+       2007.
 
-    [3] NREL SPA code: http://rredc.nrel.gov/solar/codesandalgorithms/spa/
+    .. [3] NREL SPA code: http://rredc.nrel.gov/solar/codesandalgorithms/spa/
     """
 
     if altitude is None and pressure is None:
@@ -137,13 +146,17 @@ def spa_c(time, latitude, longitude, pressure=101325, altitude=0,
     Parameters
     ----------
     time : pandas.DatetimeIndex
-        Localized or UTC.
+        Must be localized or UTC will be assumed.
     latitude : float
+        Latitude in decimal degrees. Positive north of equator, negative
+        to south.
     longitude : float
+        Longitude in decimal degrees. Positive east of prime meridian,
+        negative to west.
     pressure : float, default 101325
         Pressure in Pascals
     altitude : float, default 0
-        Elevation above sea level.
+        Height above sea level. [m]
     temperature : float, default 12
         Temperature in C
     delta_t : float, default 67.0
@@ -164,16 +177,17 @@ def spa_c(time, latitude, longitude, pressure=101325, altitude=0,
 
     References
     ----------
-    NREL SPA reference: http://rredc.nrel.gov/solar/codesandalgorithms/spa/
-    NREL SPA C files: https://midcdmz.nrel.gov/spa/
+    .. [1] NREL SPA reference:
+       http://rredc.nrel.gov/solar/codesandalgorithms/spa/
+       NREL SPA C files: https://midcdmz.nrel.gov/spa/
 
     Note: The ``timezone`` field in the SPA C files is replaced with
     ``time_zone`` to avoid a nameclash with the function ``__timezone`` that is
     redefined by Python>=3.5. This issue is
     `Python bug 24643 <https://bugs.python.org/issue24643>`_.
 
-    USNO delta T:
-    http://www.usno.navy.mil/USNO/earth-orientation/eo-products/long-term
+    .. [2] USNO delta T:
+       http://www.usno.navy.mil/USNO/earth-orientation/eo-products/long-term
 
     See also
     --------
@@ -265,7 +279,9 @@ def spa_python(time, latitude, longitude,
                atmos_refract=None, how='numpy', numthreads=4, **kwargs):
     """
     Calculate the solar position using a python implementation of the
-    NREL SPA algorithm described in [1].
+    NREL SPA algorithm.
+
+    The details of the NREL SPA algorithm are described in [1]_.
 
     If numba is installed, the functions can be compiled to
     machine code and the function can be multithreaded.
@@ -275,10 +291,15 @@ def spa_python(time, latitude, longitude,
     Parameters
     ----------
     time : pandas.DatetimeIndex
-        Localized or UTC.
+        Must be localized or UTC will be assumed.
     latitude : float
+        Latitude in decimal degrees. Positive north of equator, negative
+        to south.
     longitude : float
+        Longitude in decimal degrees. Positive east of prime meridian,
+        negative to west.
     altitude : float, default 0
+        Distance above sea level.
     pressure : int or float, optional, default 101325
         avg. yearly air pressure in Pascals.
     temperature : int or float, optional, default 12
@@ -315,14 +336,15 @@ def spa_python(time, latitude, longitude,
 
     References
     ----------
-    [1] I. Reda and A. Andreas, Solar position algorithm for solar
-    radiation applications. Solar Energy, vol. 76, no. 5, pp. 577-589, 2004.
+    .. [1] I. Reda and A. Andreas, Solar position algorithm for solar
+       radiation applications. Solar Energy, vol. 76, no. 5, pp. 577-589, 2004.
 
-    [2] I. Reda and A. Andreas, Corrigendum to Solar position algorithm for
-    solar radiation applications. Solar Energy, vol. 81, no. 6, p. 838, 2007.
+    .. [2] I. Reda and A. Andreas, Corrigendum to Solar position algorithm for
+       solar radiation applications. Solar Energy, vol. 81, no. 6, p. 838,
+       2007.
 
-    [3] USNO delta T:
-    http://www.usno.navy.mil/USNO/earth-orientation/eo-products/long-term
+    .. [3] USNO delta T:
+       http://www.usno.navy.mil/USNO/earth-orientation/eo-products/long-term
 
     See also
     --------
@@ -344,7 +366,7 @@ def spa_python(time, latitude, longitude,
         except (TypeError, ValueError):
             time = pd.DatetimeIndex([time, ])
 
-    unixtime = np.array(time.astype(np.int64)/10**9)
+    unixtime = np.array(time.view(np.int64)/10**9)
 
     spa = _spa_python_import(how)
 
@@ -474,7 +496,9 @@ def sun_rise_set_transit_spa(times, latitude, longitude, how='numpy',
                              delta_t=67.0, numthreads=4):
     """
     Calculate the sunrise, sunset, and sun transit times using the
-    NREL SPA algorithm described in [1].
+    NREL SPA algorithm.
+
+    The details of the NREL SPA algorithm are described in [1]_.
 
     If numba is installed, the functions can be compiled to
     machine code and the function can be multithreaded.
@@ -512,9 +536,9 @@ def sun_rise_set_transit_spa(times, latitude, longitude, how='numpy',
 
     References
     ----------
-    [1] Reda, I., Andreas, A., 2003. Solar position algorithm for solar
-    radiation applications. Technical report: NREL/TP-560- 34302. Golden,
-    USA, http://www.nrel.gov.
+    .. [1] Reda, I., Andreas, A., 2003. Solar position algorithm for solar
+       radiation applications. Technical report: NREL/TP-560- 34302. Golden,
+       USA, http://www.nrel.gov.
     """
     # Added by Tony Lorenzo (@alorenzo175), University of Arizona, 2015
 
@@ -529,7 +553,7 @@ def sun_rise_set_transit_spa(times, latitude, longitude, how='numpy',
 
     # must convert to midnight UTC on day of interest
     utcday = pd.DatetimeIndex(times.date).tz_localize('UTC')
-    unixtime = np.array(utcday.astype(np.int64)/10**9)
+    unixtime = np.array(utcday.view(np.int64)/10**9)
 
     spa = _spa_python_import(how)
 
@@ -679,13 +703,15 @@ def pyephem(time, latitude, longitude, altitude=0, pressure=101325,
     Parameters
     ----------
     time : pandas.DatetimeIndex
-        Localized or UTC.
+        Must be localized or UTC will be assumed.
     latitude : float
-        positive is north of 0
+        Latitude in decimal degrees. Positive north of equator, negative
+        to south.
     longitude : float
-        positive is east of 0
+        Longitude in decimal degrees. Positive east of prime meridian,
+        negative to west.
     altitude : float, default 0
-        distance above sea level in meters.
+        Height above sea level in meters. [m]
     pressure : int or float, optional, default 101325
         air pressure in Pascals.
     temperature : int or float, optional, default 12
@@ -771,8 +797,13 @@ def ephemeris(time, latitude, longitude, pressure=101325, temperature=12):
     Parameters
     ----------
     time : pandas.DatetimeIndex
+        Must be localized or UTC will be assumed.
     latitude : float
+        Latitude in decimal degrees. Positive north of equator, negative
+        to south.
     longitude : float
+        Longitude in decimal degrees. Positive east of prime meridian,
+        negative to west.
     pressure : float or Series, default 101325
         Ambient pressure (Pascals)
     temperature : float or Series, default 12
@@ -798,8 +829,8 @@ def ephemeris(time, latitude, longitude, pressure=101325, temperature=12):
     References
     -----------
 
-    Grover Hughes' class and related class materials on Engineering
-    Astronomy at Sandia National Laboratories, 1985.
+    .. [1] Grover Hughes' class and related class materials on Engineering
+       Astronomy at Sandia National Laboratories, 1985.
 
     See also
     --------
@@ -892,7 +923,7 @@ def ephemeris(time, latitude, longitude, pressure=101325, temperature=12):
 
     HrAngle = LocAST - RtAscen
     HrAngleR = np.radians(HrAngle)
-    HrAngle = HrAngle - (360 * ((abs(HrAngle) > 180)))
+    HrAngle = HrAngle - (360 * (abs(HrAngle) > 180))
 
     SunAz = np.degrees(np.arctan2(-np.sin(HrAngleR),
                                   np.cos(LatR)*np.tan(DecR) -
@@ -950,7 +981,11 @@ def calc_time(lower_bound, upper_bound, latitude, longitude, attribute, value,
     lower_bound : datetime.datetime
     upper_bound : datetime.datetime
     latitude : float
+        Latitude in decimal degrees. Positive north of equator, negative
+        to south.
     longitude : float
+        Longitude in decimal degrees. Positive east of prime meridian,
+        negative to west.
     attribute : str
         The attribute of a pyephem.Sun object that
         you want to solve for. Likely options are 'alt'
@@ -985,12 +1020,6 @@ def calc_time(lower_bound, upper_bound, latitude, longitude, attribute, value,
         If the given attribute is not an attribute of a
         PyEphem.Sun object.
     """
-
-    try:
-        import scipy.optimize as so
-    except ImportError:
-        raise ImportError('The calc_time function requires scipy')
-
     obs, sun = _ephem_setup(latitude, longitude, altitude,
                             pressure, temperature, horizon)
 
@@ -1014,7 +1043,8 @@ def pyephem_earthsun_distance(time):
 
     Parameters
     ----------
-    time : pd.DatetimeIndex
+    time : pandas.DatetimeIndex
+        Must be localized or UTC will be assumed.
 
     Returns
     -------
@@ -1035,11 +1065,14 @@ def pyephem_earthsun_distance(time):
 def nrel_earthsun_distance(time, how='numpy', delta_t=67.0, numthreads=4):
     """
     Calculates the distance from the earth to the sun using the
-    NREL SPA algorithm described in [1]_.
+    NREL SPA algorithm.
+
+    The details of the NREL SPA algorithm are described in [1]_.
 
     Parameters
     ----------
-    time : pd.DatetimeIndex
+    time : pandas.DatetimeIndex
+        Must be localized or UTC will be assumed.
 
     how : str, optional, default 'numpy'
         Options are 'numpy' or 'numba'. If numba >= 0.17.0
@@ -1076,7 +1109,7 @@ def nrel_earthsun_distance(time, how='numpy', delta_t=67.0, numthreads=4):
         except (TypeError, ValueError):
             time = pd.DatetimeIndex([time, ])
 
-    unixtime = np.array(time.astype(np.int64)/10**9)
+    unixtime = np.array(time.view(np.int64)/10**9)
 
     spa = _spa_python_import(how)
 
@@ -1152,10 +1185,10 @@ def equation_of_time_spencer71(dayofyear):
     .. [3] Frank Vignola et al., "Solar And Infrared Radiation Measurements",
        p. 13, CRC Press (2012)
 
-    .. [5] Daryl R. Myers, "Solar Radiation: Practical Modeling for Renewable
+    .. [4] Daryl R. Myers, "Solar Radiation: Practical Modeling for Renewable
        Energy Applications", p. 5 CRC Press (2013)
 
-    .. [4] Roland Hulstrom, "Solar Resources" p. 66, MIT Press (1989)
+    .. [5] Roland Hulstrom, "Solar Resources" p. 66, MIT Press (1989)
 
     See Also
     --------
@@ -1191,12 +1224,12 @@ def equation_of_time_pvcdrom(dayofyear):
 
     References
     ----------
-    [1] Soteris A. Kalogirou, "Solar Energy Engineering Processes and
-    Systems, 2nd Edition" Elselvier/Academic Press (2009).
+    .. [1] Soteris A. Kalogirou, "Solar Energy Engineering Processes and
+       Systems, 2nd Edition" Elselvier/Academic Press (2009).
 
     See Also
     --------
-    equation_of_time_Spencer71
+    equation_of_time_spencer71
     """
     # day angle relative to Vernal Equinox, typically March 22 (day number 81)
     bday = \
@@ -1207,8 +1240,10 @@ def equation_of_time_pvcdrom(dayofyear):
 
 def declination_spencer71(dayofyear):
     """
-    Solar declination from Duffie & Beckman [1] and attributed to
+    Solar declination from Duffie & Beckman and attributed to
     Spencer (1971) and Iqbal (1983).
+
+    See [1]_ for details.
 
     .. warning::
         Return units are radians, not degrees.
@@ -1225,14 +1260,14 @@ def declination_spencer71(dayofyear):
 
     References
     ----------
-    [1] J. A. Duffie and W. A. Beckman,  "Solar Engineering of Thermal
-    Processes, 3rd Edition" pp. 13-14, J. Wiley and Sons, New York (2006)
+    .. [1] J. A. Duffie and W. A. Beckman,  "Solar Engineering of Thermal
+       Processes, 3rd Edition" pp. 13-14, J. Wiley and Sons, New York (2006)
 
-    [2] J. W. Spencer, "Fourier series representation of the position of the
-    sun" in Search 2 (5), p. 172 (1971)
+    .. [2] J. W. Spencer, "Fourier series representation of the position of the
+       sun" in Search 2 (5), p. 172 (1971)
 
-    [3] Daryl R. Myers, "Solar Radiation: Practical Modeling for Renewable
-    Energy Applications", p. 4 CRC Press (2013)
+    .. [3] Daryl R. Myers, "Solar Radiation: Practical Modeling for Renewable
+       Energy Applications", p. 4 CRC Press (2013)
 
     See Also
     --------
@@ -1249,7 +1284,9 @@ def declination_spencer71(dayofyear):
 
 def declination_cooper69(dayofyear):
     """
-    Solar declination from Duffie & Beckman [1] and attributed to Cooper (1969)
+    Solar declination from Duffie & Beckman and attributed to Cooper (1969).
+
+    See [1]_ for details.
 
     .. warning::
         Return units are radians, not degrees.
@@ -1274,14 +1311,14 @@ def declination_cooper69(dayofyear):
 
     References
     ----------
-    [1] J. A. Duffie and W. A. Beckman,  "Solar Engineering of Thermal
-    Processes, 3rd Edition" pp. 13-14, J. Wiley and Sons, New York (2006)
+    .. [1] J. A. Duffie and W. A. Beckman,  "Solar Engineering of Thermal
+       Processes, 3rd Edition" pp. 13-14, J. Wiley and Sons, New York (2006)
 
-    [2] J. H. Seinfeld and S. N. Pandis, "Atmospheric Chemistry and Physics"
-    p. 129, J. Wiley (1998)
+    .. [2] J. H. Seinfeld and S. N. Pandis, "Atmospheric Chemistry and Physics"
+       p. 129, J. Wiley (1998)
 
-    [3] Daryl R. Myers, "Solar Radiation: Practical Modeling for Renewable
-    Energy Applications", p. 4 CRC Press (2013)
+    .. [3] Daryl R. Myers, "Solar Radiation: Practical Modeling for Renewable
+       Energy Applications", p. 4 CRC Press (2013)
 
     See Also
     --------
@@ -1315,17 +1352,17 @@ def solar_azimuth_analytical(latitude, hourangle, declination, zenith):
 
     References
     ----------
-    [1] J. A. Duffie and W. A. Beckman,  "Solar Engineering of Thermal
-    Processes, 3rd Edition" pp. 14, J. Wiley and Sons, New York (2006)
+    .. [1] J. A. Duffie and W. A. Beckman,  "Solar Engineering of Thermal
+       Processes, 3rd Edition" pp. 14, J. Wiley and Sons, New York (2006)
 
-    [2] J. H. Seinfeld and S. N. Pandis, "Atmospheric Chemistry and Physics"
-    p. 132, J. Wiley (1998)
+    .. [2] J. H. Seinfeld and S. N. Pandis, "Atmospheric Chemistry and Physics"
+       p. 132, J. Wiley (1998)
 
-    [3] `Wikipedia: Solar Azimuth Angle
-    <https://en.wikipedia.org/wiki/Solar_azimuth_angle>`_
+    .. [3] `Wikipedia: Solar Azimuth Angle
+       <https://en.wikipedia.org/wiki/Solar_azimuth_angle>`_
 
-    [4] `PVCDROM: Azimuth Angle <http://www.pveducation.org/pvcdrom/2-
-    properties-sunlight/azimuth-angle>`_
+    .. [4] `PVCDROM: Azimuth Angle <http://www.pveducation.org/pvcdrom/2-
+       properties-sunlight/azimuth-angle>`_
 
     See Also
     --------
@@ -1386,20 +1423,21 @@ def solar_zenith_analytical(latitude, hourangle, declination):
 
     References
     ----------
-    [1] J. A. Duffie and W. A. Beckman,  "Solar Engineering of Thermal
-    Processes, 3rd Edition" pp. 14, J. Wiley and Sons, New York (2006)
+    .. [1] J. A. Duffie and W. A. Beckman,  "Solar Engineering of Thermal
+       Processes, 3rd Edition" pp. 14, J. Wiley and Sons, New York (2006)
 
-    [2] J. H. Seinfeld and S. N. Pandis, "Atmospheric Chemistry and
-    Physics" p. 132, J. Wiley (1998)
+    .. [2] J. H. Seinfeld and S. N. Pandis, "Atmospheric Chemistry and
+       Physics" p. 132, J. Wiley (1998)
 
-    [3] Daryl R. Myers, "Solar Radiation: Practical Modeling for
-    Renewable Energy Applications", p. 5 CRC Press (2013)
+    .. [3] Daryl R. Myers, "Solar Radiation: Practical Modeling for
+       Renewable Energy Applications", p. 5 CRC Press (2013)
 
-    `Wikipedia: Solar Zenith Angle
-    <https://en.wikipedia.org/wiki/Solar_zenith_angle>`_
+    .. [4] `Wikipedia: Solar Zenith Angle
+       <https://en.wikipedia.org/wiki/Solar_zenith_angle>`_
 
-    `PVCDROM: Sun's Position
-    <http://www.pveducation.org/pvcdrom/2-properties-sunlight/suns-position>`_
+    .. [5] `PVCDROM: Sun's Position
+       <http://www.pveducation.org/pvcdrom/2-properties-sunlight/
+       suns-position>`_
 
     See Also
     --------
@@ -1434,25 +1472,25 @@ def hour_angle(times, longitude, equation_of_time):
 
     References
     ----------
-    [1] J. A. Duffie and W. A. Beckman,  "Solar Engineering of Thermal
-    Processes, 3rd Edition" pp. 13, J. Wiley and Sons, New York (2006)
+    .. [1] J. A. Duffie and W. A. Beckman,  "Solar Engineering of Thermal
+       Processes, 3rd Edition" pp. 13, J. Wiley and Sons, New York (2006)
 
-    [2] J. H. Seinfeld and S. N. Pandis, "Atmospheric Chemistry and Physics"
-    p. 132, J. Wiley (1998)
+    .. [2] J. H. Seinfeld and S. N. Pandis, "Atmospheric Chemistry and Physics"
+       p. 132, J. Wiley (1998)
 
-    [3] Daryl R. Myers, "Solar Radiation: Practical Modeling for Renewable
-    Energy Applications", p. 5 CRC Press (2013)
+    .. [3] Daryl R. Myers, "Solar Radiation: Practical Modeling for Renewable
+       Energy Applications", p. 5 CRC Press (2013)
 
     See Also
     --------
-    equation_of_time_Spencer71
+    equation_of_time_spencer71
     equation_of_time_pvcdrom
     """
     naive_times = times.tz_localize(None)  # naive but still localized
     # hours - timezone = (times - normalized_times) - (naive_times - times)
     hrs_minus_tzs = 1 / NS_PER_HR * (
-        2 * times.astype(np.int64) - times.normalize().astype(np.int64) -
-        naive_times.astype(np.int64))
+        2 * times.view(np.int64) - times.normalize().view(np.int64) -
+        naive_times.view(np.int64))
     # ensure array return instead of a version-dependent pandas <T>Index
     return np.asarray(
         15. * (hrs_minus_tzs - 12.) + longitude + equation_of_time / 4.)
@@ -1462,7 +1500,7 @@ def _hour_angle_to_hours(times, hourangle, longitude, equation_of_time):
     """converts hour angles in degrees to hours as a numpy array"""
     naive_times = times.tz_localize(None)  # naive but still localized
     tzs = 1 / NS_PER_HR * (
-        naive_times.astype(np.int64) - times.astype(np.int64))
+        naive_times.view(np.int64) - times.view(np.int64))
     hours = (hourangle - longitude - equation_of_time / 4.) / 15. + 12. + tzs
     return np.asarray(hours)
 
@@ -1476,7 +1514,7 @@ def _local_times_from_hours_since_midnight(times, hours):
     # normalize local, naive times to previous midnight and add the hours until
     # sunrise, sunset, and transit
     return pd.DatetimeIndex(
-        (naive_times.normalize().astype(np.int64) +
+        (naive_times.normalize().view(np.int64) +
          (hours * NS_PER_HR).astype(np.int64)).astype('datetime64[ns]'),
         tz=tz_info)
 
@@ -1485,7 +1523,7 @@ def _times_to_hours_after_local_midnight(times):
     """convert local pandas datetime indices to array of hours as floats"""
     times = times.tz_localize(None)
     hrs = 1 / NS_PER_HR * (
-        times.astype(np.int64) - times.normalize().astype(np.int64))
+        times.view(np.int64) - times.normalize().view(np.int64))
     return np.array(hrs)
 
 
@@ -1524,11 +1562,11 @@ def sun_rise_set_transit_geometric(times, latitude, longitude, declination,
 
     References
     ----------
-    [1] J. A. Duffie and W. A. Beckman,  "Solar Engineering of Thermal
-    Processes, 3rd Edition," J. Wiley and Sons, New York (2006)
+    .. [1] J. A. Duffie and W. A. Beckman,  "Solar Engineering of Thermal
+       Processes, 3rd Edition," J. Wiley and Sons, New York (2006)
 
-    [2] Frank Vignola et al., "Solar And Infrared Radiation Measurements,"
-    CRC Press (2012)
+    .. [2] Frank Vignola et al., "Solar And Infrared Radiation Measurements,"
+       CRC Press (2012)
 
     """
     latitude_rad = np.radians(latitude)  # radians

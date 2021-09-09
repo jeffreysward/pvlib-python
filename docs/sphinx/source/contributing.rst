@@ -196,8 +196,6 @@ pvlib python generally follows the `PEP 8 -- Style Guide for Python Code
 <https://www.python.org/dev/peps/pep-0008/>`_. Maximum line length for code
 is 79 characters.
 
-Code must be compatible with Python 3.5 and above.
-
 pvlib python uses a mix of full and abbreviated variable names. See
 :ref:`variables_style_rules`. We could be better about consistency.
 Prefer full names for new contributions. This is especially important
@@ -215,7 +213,7 @@ Remove any ``logging`` calls and ``print`` statements that you added
 during development. ``warning`` is ok.
 
 We typically use GitHub's
-"`squash and merge` <https://help.github.com/articles/about-pull-request-merges/#squash-and-merge-your-pull-request-commits>_"
+"`squash and merge <https://help.github.com/articles/about-pull-request-merges/#squash-and-merge-your-pull-request-commits>`_"
 feature to merge your pull request into pvlib. GitHub will condense the
 commit history of your branch into a single commit when merging into
 pvlib-python/master (the commit history on your branch remains
@@ -245,41 +243,116 @@ specific types may be used:
 
 Parameters that specify a specific type require that specific input type.
 
-A relatively easy way to test your documentation is to build it on
-`readthedocs.org <https://readthedocs.org>` by following their
-`Import Your Docs <http://docs.readthedocs.io/en/stable/getting_started.html#import-your-docs>`_
-instructions and enabling your branch on the readthedocs
-`versions admin page <http://docs.readthedocs.io/en/stable/features.html#versions>`_.
+Read the Docs will automatically build the documentation for each pull
+request. Please confirm the documentation renders correctly by following
+the ``docs/readthedocs.org:pvlib-python`` link within the checks
+status box at the bottom of the pull request.
 
-Another option is to install the required dependencies in your virtual/conda
-environment. See
-`docs/environment.yml <https://github.com/pvlib/pvlib-python/blob/master/docs/environment.yml>`_
-for the latest dependences for building the complete documentation. Some
-doc files can be compiled with fewer dependencies, but this is beyond
-the scope of this guide.
+Building the documentation
+--------------------------
+
+Building the documentation locally is useful for testing out changes to the
+documentation's source code without having to repeatedly update a PR and have
+Read the Docs build it for you.  Building the docs locally requires installing
+pvlib python as an editable library (see :ref:`installation` for instructions).
+First, install the ``doc`` dependencies specified in the
+``EXTRAS_REQUIRE`` section of
+`setup.py <https://github.com/pvlib/pvlib-python/blob/master/setup.py>`_.
+An easy way to do this is with::
+
+    pip install pvlib[doc]
+
+Note: Anaconda users may have trouble using the above command to update an
+older version of docutils. If that happens, you can update it with ``conda``
+(e.g. ``conda install docutils=0.15.2``) and run the above command again.
+
+Once the ``doc`` dependencies are installed, navigate to ``/docs/sphinx`` and
+execute::
+
+    make html
+
+Be sure to skim through the output of this command because Sphinx might emit
+helpful warnings about problems with the documentation source code.
+If the build succeeds, it will make a new directory ``docs/sphinx/build``
+with the documentation's homepage located at ``build/html/index.html``.
+This file can be opened with a web browser to view the local version
+like any other website. Other output formats are available; run ``make help``
+for more information.
+
+Note that Windows users need not have the ``make`` utility installed as pvlib
+includes a ``make.bat`` batch file that emulates its interface.
+
+Example Gallery
+---------------
+
+The example gallery uses `sphinx-gallery <https://sphinx-gallery.github.io/>`_
+and is generated from script files in the
+`docs/examples <https://github.com/pvlib/pvlib-python/tree/master/docs/examples>`_
+directory.  sphinx-gallery will execute example files that start with
+``plot_`` and capture the output.
+
+Here is a starter template for new examples:
+
+.. code-block:: python
+
+    """
+    Page Title
+    ==========
+
+    A sentence describing the example.
+    """
+
+    # %%
+    # Explanatory text about the example, what it does, why it does it, etc.
+    # Text in the comment block before the first line of code `import pvlib`
+    # will be printed to the example's webpage.
+
+    import pvlib
+    import matplotlib.pyplot as plt
+
+    plt.scatter([1, 2, 3], [4, 5, 6])
+    plt.show()
+
+For more details, see the sphinx-gallery
+`docs <https://sphinx-gallery.github.io/stable/syntax.html#embedding-rst>`_.
 
 .. _testing:
 
 Testing
 ~~~~~~~
 
+Developers **must** include comprehensive tests for any additions or
+modifications to pvlib. New unit test code should be placed in the
+corresponding test module in the
+`pvlib/tests <https://github.com/pvlib/pvlib-python/tree/master/pvlib/tests>`_
+directory.
+
+A pull request will automatically run the tests for you on a variety of
+platforms (Linux, Mac, Windows) and python versions. However, it is
+typically more efficient to run and debug the tests in your own local
+environment.
+
+To run the tests locally, install the ``test`` dependencies specified in the
+`setup.py <https://github.com/pvlib/pvlib-python/blob/master/setup.py>`_
+file. See :ref:`installation` instructions for more information.
+
 pvlib's unit tests can easily be run by executing ``pytest`` on the
-pvlib directory:
+pvlib directory::
 
-``pytest pvlib``
+    pytest pvlib
 
-or, for a single module:
+or, for a single module::
 
-``pytest pvlib/test/test_clearsky.py``
+    pytest pvlib/tests/test_clearsky.py
 
-or, for a single test:
+or, for a single test::
 
-``pytest pvlib/test/test_clearsky.py::test_ineichen_nans``
+    pytest pvlib/tests/test_clearsky.py::test_ineichen_nans
 
 We suggest using pytest's ``--pdb`` flag to debug test failures rather
-than using ``print`` or ``logging`` calls. For example:
+than using ``print`` or ``logging`` calls. For example::
 
-``pytest pvlib --pdb``
+    pytest pvlib --pdb
 
 will drop you into the
 `pdb debugger <https://docs.python.org/3/library/pdb.html>`_ at the
@@ -287,11 +360,13 @@ location of a test failure. As described in :ref:`code-style`, pvlib
 code does not use ``print`` or ``logging`` calls, and this also applies
 to the test suite (with rare exceptions).
 
-New unit test code should be placed in the corresponding test module in
-the pvlib/test directory.
+To include all network-dependent tests, include the ``--remote-data`` flag to
+your ``pytest`` call::
 
-Developers **must** include comprehensive tests for any additions or
-modifications to pvlib.
+    pytest pvlib --remote-data
+
+And consider adding ``@pytest.mark.remote_data`` to any network dependent test
+you submit for a PR.
 
 pvlib-python contains 3 "layers" of code: functions, PVSystem/Location,
 and ModelChain. Contributors will need to add tests that correspond to
@@ -398,12 +473,26 @@ PVSystem method is called through ``ModelChain.run_model``.
         mc.run_model(times)
 
         # assertion fails if PVSystem.sapm is not called once
-        # if using returned m, prefer this over m.assert_called_once()
-        # for compatibility with python < 3.6
-        assert m.call_count == 1
+        m.assert_called_once()
+
+        # use `assert m.call_count == num` if function should be called
+        # more than once
 
         # ensure that dc attribute now exists and is correct type
         assert isinstance(mc.dc, (pd.Series, pd.DataFrame))
+
+
+Benchmarking
+~~~~~~~~~~~~
+
+pvlib includes a small number of performance benchmarking tests. These
+tests are run using the `airspeed velocity
+<https://asv.readthedocs.io/en/stable/>`_ tool. We do not require new
+performance tests for most contributions at this time. Pull request
+reviewers will provide further information if a performance test is
+necessary. See our `README
+<https://github.com/pvlib/pvlib-python/tree/master/benchmarks/README.md>`_
+for instructions on running the benchmarks.
 
 
 This documentation
@@ -413,3 +502,8 @@ If this documentation is unclear, help us improve it! Consider looking
 at the `pandas
 documentation <http://pandas.pydata.org/pandas-docs/stable/
 contributing.html>`_ for inspiration.
+
+Code of Conduct
+~~~~~~~~~~~~~~~
+All contributors are expected to adhere to the `Contributor Code of Conduct
+<https://github.com/pvlib/pvlib-python/blob/master/CODE_OF_CONDUCT.md#contributor-covenant-code-of-conduct>`_.

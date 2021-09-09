@@ -25,9 +25,6 @@
 <tr>
   <td>Build Status</td>
   <td>
-    <a href="https://travis-ci.org/pvlib/pvlib-python">
-    <img src="https://travis-ci.org/pvlib/pvlib-python.svg?branch=master" alt="travis build status" />
-    </a>
     <a href="http://pvlib-python.readthedocs.org/en/stable/">
     <img src="https://readthedocs.org/projects/pvlib-python/badge/?version=stable" alt="documentation build status" />
     </a>
@@ -61,8 +58,8 @@
 <tr>
   <td>Publications</td>
   <td>
-    <a href="https://doi.org/10.5281/zenodo.2554311">
-    <img src="https://zenodo.org/badge/DOI/10.5281/zenodo.2554311.svg" alt="zenodo reference" />
+    <a href="https://doi.org/10.5281/zenodo.3762635">
+    <img src="https://zenodo.org/badge/DOI/10.5281/zenodo.3762635.svg" alt="zenodo reference">
     </a>
     <a href="http://joss.theoj.org/papers/41187535cad22dd4b076c89b72f874b1">
     <img src="http://joss.theoj.org/papers/41187535cad22dd4b076c89b72f874b1/status.svg" alt="JOSS reference" />
@@ -105,10 +102,6 @@ Installation
 pvlib-python releases may be installed using the ``pip`` and ``conda`` tools.
 Please see the [Installation page](http://pvlib-python.readthedocs.io/en/stable/installation.html) of the documentation for complete instructions.
 
-pvlib-python is compatible with Python 3.5 and above.
-
-**Python 2.7 support ended on June 1, 2019, with pvlib-python 0.6.3.**
-
 
 Contributing
 ============
@@ -118,11 +111,24 @@ Please see the [Contributing page](http://pvlib-python.readthedocs.io/en/stable/
 The long-term success of pvlib-python requires substantial community support.
 
 
-License
-=======
+Citing
+======
 
-BSD 3-clause
+If you use pvlib-python in a published work, please cite:
 
+  William F. Holmgren, Clifford W. Hansen, and Mark A. Mikofski.
+  "pvlib python: a python package for modeling solar energy systems."
+  Journal of Open Source Software, 3(29), 884, (2018).
+  https://doi.org/10.21105/joss.00884
+
+Please also cite the DOI corresponding to the specific version of
+pvlib-python that you used. pvlib-python DOIs are listed at
+[Zenodo.org](https://zenodo.org/search?page=1&size=20&q=conceptrecid:593284&all_versions&sort=-version)
+
+If you use pvlib-python in a commercial or publicly-available application, please
+consider displaying one of the "powered by pvlib" logos:
+
+<img src="docs/sphinx/source/_images/pvlib_powered_logo_vert.png" width="300"><img src="docs/sphinx/source/_images/pvlib_powered_logo_horiz.png" width="300">
 
 Getting support
 ===============
@@ -140,19 +146,12 @@ change something about pvlib, then please make an issue on our
 [GitHub issues page](https://github.com/pvlib/pvlib-python/issues).
 
 
-Citing
-======
 
-If you use pvlib-python in a published work, please cite:
+License
+=======
 
-  William F. Holmgren, Clifford W. Hansen, and Mark A. Mikofski.
-  "pvlib python: a python package for modeling solar energy systems."
-  Journal of Open Source Software, 3(29), 884, (2018).
-  https://doi.org/10.21105/joss.00884
+BSD 3-clause.
 
-Please also cite the DOI corresponding to the specific version of
-pvlib-python that you used. pvlib-python DOIs are listed at
-[Zenodo.org](https://zenodo.org/search?page=1&size=20&q=conceptrecid:593284&all_versions&sort=-version)
 
 NumFOCUS
 ========

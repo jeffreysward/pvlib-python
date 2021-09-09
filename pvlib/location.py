@@ -5,14 +5,14 @@ This module contains the Location class.
 # Will Holmgren, University of Arizona, 2014-2016.
 
 import datetime
+import warnings
 
 import pandas as pd
 import pytz
 
 from pvlib import solarposition, clearsky, atmosphere, irradiance
 
-
-class Location(object):
+class Location:
     """
     Location objects are convenient containers for latitude, longitude,
     timezone, and altitude data associated with a particular
@@ -48,17 +48,12 @@ class Location(object):
     name : None or string, default None.
         Sets the name attribute of the Location object.
 
-    **kwargs
-        Arbitrary keyword arguments.
-        Included for compatibility, but not used.
-
     See also
     --------
-    pvsystem.PVSystem
+    pvlib.pvsystem.PVSystem
     """
 
-    def __init__(self, latitude, longitude, tz='UTC', altitude=0,
-                 name=None, **kwargs):
+    def __init__(self, latitude, longitude, tz='UTC', altitude=0, name=None):
 
         self.latitude = latitude
         self.longitude = longitude
@@ -66,6 +61,9 @@ class Location(object):
         if isinstance(tz, str):
             self.tz = tz
             self.pytz = pytz.timezone(tz)
+        elif isinstance(tz, datetime.timezone):
+            self.tz = 'UTC'
+            self.pytz = pytz.UTC
         elif isinstance(tz, datetime.tzinfo):
             self.tz = tz.zone
             self.pytz = tz
@@ -82,7 +80,7 @@ class Location(object):
     def __repr__(self):
         attrs = ['name', 'latitude', 'longitude', 'altitude', 'tz']
         return ('Location: \n  ' + '\n  '.join(
-            ('{}: {}'.format(attr, getattr(self, attr)) for attr in attrs)))
+            f'{attr}: {getattr(self, attr)}' for attr in attrs))
 
     @classmethod
     def from_tmy(cls, tmy_metadata, tmy_data=None, **kwargs):
@@ -99,8 +97,7 @@ class Location(object):
 
         Returns
         -------
-        Location object (or the child class of Location that you
-        called this method from).
+        Location
         """
         # not complete, but hopefully you get the idea.
         # might need code to handle the difference between tmy2 and tmy3
@@ -125,25 +122,62 @@ class Location(object):
         # not sure if this should be assigned regardless of input.
         if tmy_data is not None:
             new_object.tmy_data = tmy_data
+            new_object.weather = tmy_data
+
+        return new_object
+
+    @classmethod
+    def from_epw(cls, metadata, data=None, **kwargs):
+        """
+        Create a Location object based on a metadata
+        dictionary from epw data readers.
+
+        Parameters
+        ----------
+        metadata : dict
+            Returned from epw.read_epw
+        data : None or DataFrame, default None
+            Optionally attach the epw data to this object.
+
+        Returns
+        -------
+        Location object (or the child class of Location that you
+        called this method from).
+        """
+
+        latitude = metadata['latitude']
+        longitude = metadata['longitude']
+
+        name = metadata['city']
+
+        tz = metadata['TZ']
+        altitude = metadata['altitude']
+
+        new_object = cls(latitude, longitude, tz=tz, altitude=altitude,
+                         name=name, **kwargs)
+
+        if data is not None:
+            new_object.weather = data
 
         return new_object
 
     def get_solarposition(self, times, pressure=None, temperature=12,
                           **kwargs):
         """
-        Uses the :py:func:`solarposition.get_solarposition` function
+        Uses the :py:func:`pvlib.solarposition.get_solarposition` function
         to calculate the solar zenith, azimuth, etc. at this location.
 
         Parameters
         ----------
-        times : DatetimeIndex
+        times : pandas.DatetimeIndex
+            Must be localized or UTC will be assumed.
         pressure : None, float, or array-like, default None
             If None, pressure will be calculated using
-            :py:func:`atmosphere.alt2pres` and ``self.altitude``.
+            :py:func:`pvlib.atmosphere.alt2pres` and ``self.altitude``.
         temperature : None, float, or array-like, default 12
 
         kwargs
-            passed to :py:func:`solarposition.get_solarposition`
+            passed to :py:func:`pvlib.solarposition.get_solarposition`
 
         Returns
         -------
@@ -249,12 +283,18 @@ class Location(object):
         solar_position : None or DataFrame, default None
             DataFrame with with columns 'apparent_zenith', 'zenith'.
         model : str, default 'kastenyoung1989'
-            Relative airmass model
+            Relative airmass model. See
+            :py:func:`pvlib.atmosphere.get_relative_airmass`
+            for a list of available models.
 
         Returns
         -------
         airmass : DataFrame
             Columns are 'airmass_relative', 'airmass_absolute'
+
+        See also
+        --------
+        pvlib.atmosphere.get_relative_airmass
         """
 
         if solar_position is None:
@@ -265,7 +305,7 @@ class Location(object):
         elif model in atmosphere.TRUE_ZENITH_MODELS:
             zenith = solar_position['zenith']
         else:
-            raise ValueError('{} is not a valid airmass model'.format(model))
+            raise ValueError(f'{model} is not a valid airmass model')
 
         airmass_relative = atmosphere.get_relative_airmass(zenith, model)
 
