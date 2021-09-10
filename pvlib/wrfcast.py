@@ -11,7 +11,8 @@ from requests.exceptions import HTTPError
 from xml.etree.ElementTree import ParseError
 
 from pvlib.location import Location
-from pvlib.irradiance import liujordan, get_extra_radiation, disc
+from pvlib.irradiance import campbell_norman, get_extra_radiation, disc
+from pvlib.irradiance import _liujordan
 import wrf
 from siphon.catalog import TDSCatalog
 from siphon.ncss import NCSS
