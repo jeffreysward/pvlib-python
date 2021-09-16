@@ -720,7 +720,33 @@ class WRF(ForecastModel):
             'dhi'
             ]
 
-        super(WRF, self).__init__(model_type, model_name, set_type, vert_level=None)
+        super().__init__(model_type, model_name, set_type, vert_level=None)
+
+    def get_data(self, wrfout_dir, wrfout_file, start=None, end=None, 
+                 query_variables=None, **kwargs):
+
+        if query_variables is None:
+            self.query_variables = list(self.variables.values())
+        else:
+            self.query_variables = query_variables
+
+        # Absolute path to wrfout data file
+        datapath = wrfout_dir + wrfout_file
+
+        # Read in the wrfout file using the netCDF4.Dataset method 
+        # (You could probably also do this with an xarray method)
+        netcdf_data = Dataset(datapath)
+
+        # Create an xarray.Dataset from the wrf qurery_variables.
+        data = self._wrf2xarray(netcdf_data, self.query_variables)
+
+        # Slice the wrfout data if start and end times ares specified
+        if start and end is not None:
+            self.start = pd.Timestamp(start)
+            self.end = pd.Timestamp(end)
+            data = data.sel(Time=slice(self.start, self.end))
+
+        return data
 
     def process_data(self, data, **kwargs):
         """
@@ -729,7 +755,7 @@ class WRF(ForecastModel):
 
         Parameters
         ----------
-        data: DataFrame
+        data: xarray.Dataset
             Raw forecast data
 
         Returns
@@ -737,9 +763,6 @@ class WRF(ForecastModel):
         data: DataFrame
             Processed forecast data.
         """
-        # Below is the method that the other forecasts use,
-        # but is overly complex and the existing rename function doesn't apply to xarray
-        # data = super(WRF, self).process_data(data, **kwargs)
 
         # Rename the variables (invert the self.variables list for this to work properly)
         data = xr.Dataset.rename(data, {v: k for k, v in self.variables.items()})
@@ -749,3 +772,70 @@ class WRF(ForecastModel):
         data['wind_speed'] = self.uv_to_speed(data)
         data['ghi'] = self.dni_and_dhi_to_ghi(data['dni'], data['dhi'], data['cos_zenith'])
         return data[self.output_variables]
+
+    def get_wspd_wdir(self, netcdf_data, key):
+        """
+        Formats the wind speed and wind direction so it can be merged into
+        an xarray Dataset with all the other variables extracted using getvar
+        :param netcdf_data:
+        :param key:
+        :return:
+        """
+        var = wrf.getvar(netcdf_data, key, wrf.ALL_TIMES)
+        var = xr.DataArray.reset_coords(var, ['wspd_wdir'], drop=True)
+        var.name = key
+        return var
+
+    def _wrf2xarray(self, netcdf_data, query_variables):
+        """
+        Gets data from the netcdf wrfout file and uses wrf-python
+        to create an xarray Dataset.
+
+        Parameters
+        ----------
+        netcdf_data: netcdf
+            Data returned from your WRF forecast.
+        query_variables: list
+            The variables requested.
+
+        Returns
+        -------
+        xarray.Dataset
+        """
+        first = True
+        for key in query_variables:
+            if key in ['wspd', 'wdir']:
+                var = self.get_wspd_wdir(netcdf_data, key)
+            else:
+                var = wrf.getvar(netcdf_data, key, timeidx=wrf.ALL_TIMES)
+            if first:
+                data = var
+                first = False
+            else:
+                with xr.set_options(keep_attrs=True):
+                    try:
+                        data = xr.merge([data, var])
+                    except ValueError:
+                        data = data.drop_vars('Time')
+                        data = xr.merge([data, var])
+
+        # Get global attributes from the NetCDF Dataset
+        wrfattrs_names = netcdf_data.ncattrs()
+        wrfattrs = wrf.extract_global_attrs(netcdf_data, wrfattrs_names)
+        data = data.assign_attrs(wrfattrs)
+
+        # Fix a bug in how wrfout data is read in -- attributes must be strings to be written to NetCDF
+        for var in data.data_vars:
+            try:
+                data[var].attrs['projection'] = str(data[var].attrs['projection'])
+            except KeyError:
+                pass
+
+        # Fix another bug that creates a conflict in the 'coordinates' attribute
+        for var in data.data_vars:
+            try:
+                del data[var].attrs['coordinates']
+            except KeyError:
+                pass
+
+        return data
