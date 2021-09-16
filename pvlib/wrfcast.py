@@ -764,13 +764,18 @@ class WRF(ForecastModel):
             Processed forecast data.
         """
 
-        # Rename the variables (invert the self.variables list for this to work properly)
-        data = xr.Dataset.rename(data, {v: k for k, v in self.variables.items()})
+        # Rename the variables 
+        # (we have to invert them first to maintain the input format)
+        data = xr.Dataset.rename(data, {y: x for x, y in self.variables.items()})
 
         # Calculate other quantities
         data['temp_air'] = self.kelvin_to_celsius(data['temp_air'])
         data['wind_speed'] = self.uv_to_speed(data)
         data['ghi'] = self.dni_and_dhi_to_ghi(data['dni'], data['dhi'], data['cos_zenith'])
+
+        # Drop unnecessary coordinate
+        data = xr.Dataset.reset_coords(data, ['XTIME'], drop=True)
+
         return data[self.output_variables]
 
     def get_wspd_wdir(self, netcdf_data, key):
