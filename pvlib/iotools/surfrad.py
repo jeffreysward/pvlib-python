@@ -44,10 +44,10 @@ def read_surfrad(filename, map_variables=True):
     Parameters
     ----------
     filename: str
-        Filepath or url.
+        Filepath or URL. URL can be either FTP or HTTP.
     map_variables: bool
         When true, renames columns of the Dataframe to pvlib variable names
-        where applicable. See variable SURFRAD_COLUMNS.
+        where applicable. See variable :const:`VARIABLE_MAP`.
 
     Returns
     -------
@@ -113,7 +113,8 @@ def read_surfrad(filename, map_variables=True):
     =======================  ======  ==========================================
 
     See README files located in the station directories in the SURFRAD
-    data archives[2]_ for details on SURFRAD daily data files.
+    data archives [2]_ for details on SURFRAD daily data files. In addition to
+    the FTP server, the SURFRAD files are also available via HTTP access [3]_.
 
     References
     ----------
@@ -122,8 +123,10 @@ def read_surfrad(filename, map_variables=True):
        `SURFRAD Homepage <https://www.esrl.noaa.gov/gmd/grad/surfrad/>`_
     .. [2] NOAA SURFRAD Data Archive
        `SURFRAD Archive <ftp://aftp.cmdl.noaa.gov/data/radiation/surfrad/>`_
+    .. [3] `NOAA SURFRAD HTTP Index
+       <https://gml.noaa.gov/aftp/data/radiation/surfrad/>`_
     """
-    if str(filename).startswith('ftp'):
+    if str(filename).startswith('ftp') or str(filename).startswith('http'):
         req = Request(filename)
         response = urlopen(req)
         file_buffer = io.StringIO(response.read().decode(errors='ignore'))
@@ -143,20 +146,20 @@ def read_surfrad(filename, map_variables=True):
     metadata['surfrad_version'] = int(metadata_list[-1])
     metadata['tz'] = 'UTC'
 
-    data = pd.read_csv(file_buffer, delim_whitespace=True,
+    data = pd.read_csv(file_buffer, sep=r'\s+',
                        header=None, names=SURFRAD_COLUMNS)
     file_buffer.close()
 
-    data = format_index(data)
+    data = _format_index(data)
     missing = data == -9999.9
-    data = data.where(~missing, np.NaN)
+    data = data.where(~missing, np.nan)
 
     if map_variables:
         data.rename(columns=VARIABLE_MAP, inplace=True)
     return data, metadata
 
 
-def format_index(data):
+def _format_index(data):
     """Create UTC localized DatetimeIndex for the dataframe.
 
     Parameters

@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from scipy import optimize
 
 import pytest
 from numpy.testing import assert_allclose
@@ -79,6 +80,25 @@ def test_fit_desoto():
                        rtol=1e-4)
 
 
+def test_fit_desoto_init_guess(mocker):
+    init_guess_array = np.array([9.4, 3.0e-10, 0.3, 125., 1.6])
+    init_guess = {k: v for k, v in zip(
+        ['IL_0', 'Io_0', 'Rs_0', 'Rsh_0', 'a_0'], init_guess_array)}
+    spy = mocker.spy(optimize, 'root')
+    result, _ = sdm.fit_desoto(v_mp=31.0, i_mp=8.71, v_oc=38.3, i_sc=9.43,
+                               alpha_sc=0.005658, beta_voc=-0.13788,
+                               cells_in_series=60, init_guess=init_guess)
+    np.testing.assert_array_equal(init_guess_array, spy.call_args[1]['x0'])
+
+
+def test_fit_desoto_init_bad_key():
+    init_guess = {'IL_0': 6., 'bad_key': 0}
+    with pytest.raises(ValueError, match='is not a valid name;'):
+        result, _ = sdm.fit_desoto(v_mp=31.0, i_mp=8.71, v_oc=38.3, i_sc=9.43,
+                                   alpha_sc=0.005658, beta_voc=-0.13788,
+                                   cells_in_series=60, init_guess=init_guess)
+
+
 def test_fit_desoto_failure():
     with pytest.raises(RuntimeError) as exc:
         sdm.fit_desoto(v_mp=31.0, i_mp=8.71, v_oc=38.3, i_sc=9.43,
@@ -100,11 +120,15 @@ def test_fit_desoto_sandia(cec_params_cansol_cs5p_220p):
     temp_cell = np.array([15., 25., 35., 45.])
     ee = np.tile(effective_irradiance, len(temp_cell))
     tc = np.repeat(temp_cell, len(effective_irradiance))
-    iph, io, rs, rsh, nnsvth = pvsystem.calcparams_desoto(
+    IL, I0, Rs, Rsh, nNsVth = pvsystem.calcparams_desoto(
         ee, tc, alpha_sc=specs['alpha_sc'], **params)
-    sim_ivcurves = pvsystem.singlediode(iph, io, rs, rsh, nnsvth, 300)
-    sim_ivcurves['ee'] = ee
-    sim_ivcurves['tc'] = tc
+    ivcurve_params = dict(photocurrent=IL, saturation_current=I0,
+                          resistance_series=Rs, resistance_shunt=Rsh,
+                          nNsVth=nNsVth)
+    sim_ivcurves = pvsystem.singlediode(**ivcurve_params).to_dict('series')
+    v = np.linspace(0., sim_ivcurves['v_oc'], 300)
+    i = pvsystem.i_from_v(voltage=v, **ivcurve_params)
+    sim_ivcurves.update(v=v.T, i=i.T, ee=ee, tc=tc)
 
     result = sdm.fit_desoto_sandia(sim_ivcurves, specs)
     modeled = pd.Series(index=params.keys(), data=np.nan)
@@ -116,6 +140,9 @@ def test_fit_desoto_sandia(cec_params_cansol_cs5p_220p):
     expected = pd.Series(params)
     assert np.allclose(modeled[params.keys()].values,
                        expected[params.keys()].values, rtol=5e-2)
+    assert_allclose(result['dEgdT'], -0.0002677)
+    assert_allclose(result['EgRef'], 1.3112547292120638)
+    assert_allclose(result['cells_in_series'], specs['cells_in_series'])
 
 
 def _read_iv_curves_for_test(datafile, npts):

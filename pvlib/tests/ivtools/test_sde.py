@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 from pvlib import pvsystem
 from pvlib.ivtools import sde
+from pvlib._deprecation import pvlibDeprecationWarning
 
 
 @pytest.fixture
@@ -11,31 +12,32 @@ def get_test_iv_params():
 
 def test_fit_sandia_simple(get_test_iv_params, get_bad_iv_curves):
     test_params = get_test_iv_params
-    testcurve = pvsystem.singlediode(photocurrent=test_params['IL'],
-                                     saturation_current=test_params['I0'],
-                                     resistance_shunt=test_params['Rsh'],
-                                     resistance_series=test_params['Rs'],
-                                     nNsVth=test_params['nNsVth'],
-                                     ivcurve_pnts=300)
-    expected = tuple(test_params[k] for k in ['IL', 'I0', 'Rs', 'Rsh',
-                     'nNsVth'])
-    result = sde.fit_sandia_simple(voltage=testcurve['v'],
-                                   current=testcurve['i'])
+    test_params = dict(photocurrent=test_params['IL'],
+                       saturation_current=test_params['I0'],
+                       resistance_series=test_params['Rs'],
+                       resistance_shunt=test_params['Rsh'],
+                       nNsVth=test_params['nNsVth'])
+    testcurve = pvsystem.singlediode(**test_params)
+    v = np.linspace(0., testcurve['v_oc'], 300)
+    i = pvsystem.i_from_v(voltage=v, **test_params)
+    expected = tuple(test_params.values())
+
+    result = sde.fit_sandia_simple(voltage=v, current=i)
     assert np.allclose(result, expected, rtol=5e-5)
-    result = sde.fit_sandia_simple(voltage=testcurve['v'],
-                                   current=testcurve['i'],
+
+    result = sde.fit_sandia_simple(voltage=v, current=i,
                                    v_oc=testcurve['v_oc'],
                                    i_sc=testcurve['i_sc'])
     assert np.allclose(result, expected, rtol=5e-5)
-    result = sde.fit_sandia_simple(voltage=testcurve['v'],
-                                   current=testcurve['i'],
+
+    result = sde.fit_sandia_simple(voltage=v, current=i,
                                    v_oc=testcurve['v_oc'],
                                    i_sc=testcurve['i_sc'],
                                    v_mp_i_mp=(testcurve['v_mp'],
-                                   testcurve['i_mp']))
+                                              testcurve['i_mp']))
     assert np.allclose(result, expected, rtol=5e-5)
-    result = sde.fit_sandia_simple(voltage=testcurve['v'],
-                                   current=testcurve['i'], vlim=0.1)
+
+    result = sde.fit_sandia_simple(voltage=v, current=i, vlim=0.1)
     assert np.allclose(result, expected, rtol=5e-5)
 
 
@@ -53,14 +55,6 @@ def test_fit_sandia_simple_bad_iv(get_bad_iv_curves):
 
 
 @pytest.mark.parametrize('i,v,nsvth,expected',  [
-    (np.array(
-        [4., 3.95, 3.92, 3.9, 3.89, 3.88, 3.82, 3.8, 3.75, 3.7, 3.68, 3.66,
-         3.65, 3.5, 3.2, 2.7, 2.2, 1.3, .6, 0.]),
-     np.array(
-        [0., .2, .4, .6, .8, 1., 1.2, 1.4, 1.6, 1.8, 2., 2.2, 2.4, 2.6, 2.7,
-         2.76, 2.78, 2.81, 2.85, 2.88]),
-     2.,
-     (-96695.792, 96699.876, 7.4791, .0288, -.1413)),
     (np.array([3., 2.9, 2.8, 2.7, 2.6, 2.5, 2.4, 1.7, 0.8, 0.]),
      np.array([0., 0.2, 0.4, 0.6, 0.8, 1., 1.2, 1.4, 1.45, 1.5]),
      10.,

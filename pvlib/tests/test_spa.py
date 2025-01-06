@@ -1,6 +1,8 @@
 import os
 import datetime as dt
 import warnings
+import pytest
+import pvlib
 
 try:
     from importlib import reload
@@ -15,20 +17,12 @@ from numpy.testing import assert_almost_equal
 import pandas as pd
 
 import unittest
-import pytest
-
-
-try:
-    from numba import __version__ as numba_version
-    numba_version_int = int(numba_version.split('.')[0] +
-                            numba_version.split('.')[1])
-except ImportError:
-    numba_version_int = 0
+from .conftest import requires_numba
 
 
 times = (pd.date_range('2003-10-17 12:30:30', periods=1, freq='D')
            .tz_localize('MST'))
-unixtimes = np.array(times.tz_convert('UTC').astype(np.int64)*1.0/10**9)
+unixtimes = np.array(times.tz_convert('UTC').view(np.int64)*1.0/10**9)
 
 lat = 39.742476
 lon = -105.1786
@@ -154,13 +148,12 @@ class SpaBase:
     def test_moon_ascending_longitude(self):
         assert_almost_equal(X4, self.spa.moon_ascending_longitude(JCE), 6)
 
-    def test_longitude_nutation(self):
-        assert_almost_equal(dPsi, self.spa.longitude_nutation(
-            JCE, X0, X1, X2, X3, X4), 6)
-
-    def test_obliquity_nutation(self):
-        assert_almost_equal(dEpsilon, self.spa.obliquity_nutation(
-            JCE, X0, X1, X2, X3, X4), 6)
+    def test_longitude_obliquity_nutation(self):
+        out = np.empty((2,))
+        self.spa.longitude_obliquity_nutation(JCE, X0, X1, X2, X3, X4, out)
+        _dPsi, _dEpsilon = out[0], out[1]
+        assert_almost_equal(dPsi, _dPsi, 6)
+        assert_almost_equal(dEpsilon, _dEpsilon, 6)
 
     def test_mean_ecliptic_obliquity(self):
         assert_almost_equal(epsilon0, self.spa.mean_ecliptic_obliquity(JME), 6)
@@ -243,7 +236,7 @@ class SpaBase:
 
     def test_solar_position(self):
         with warnings.catch_warnings():
-            # don't warn on method reload or num threads
+            # don't warn on method reload
             warnings.simplefilter("ignore")
             spa_out_0 = self.spa.solar_position(
                 unixtimes, lat, lon, elev, pressure, temp, delta_t,
@@ -266,15 +259,15 @@ class SpaBase:
         times = pd.DatetimeIndex([dt.datetime(1996, 7, 5, 0),
                                   dt.datetime(2004, 12, 4, 0)]
                                  ).tz_localize(
-                                     'UTC').astype(np.int64)*1.0/10**9
+                                     'UTC').view(np.int64)*1.0/10**9
         sunrise = pd.DatetimeIndex([dt.datetime(1996, 7, 5, 7, 8, 15),
                                     dt.datetime(2004, 12, 4, 4, 38, 57)]
                                    ).tz_localize(
-                                       'UTC').astype(np.int64)*1.0/10**9
+                                       'UTC').view(np.int64)*1.0/10**9
         sunset = pd.DatetimeIndex([dt.datetime(1996, 7, 5, 17, 1, 4),
                                    dt.datetime(2004, 12, 4, 19, 2, 2)]
                                   ).tz_localize(
-                                      'UTC').astype(np.int64)*1.0/10**9
+                                      'UTC').view(np.int64)*1.0/10**9
         times = np.array(times)
         sunrise = np.array(sunrise)
         sunset = np.array(sunset)
@@ -284,13 +277,13 @@ class SpaBase:
 
         times = pd.DatetimeIndex([dt.datetime(1994, 1, 2), ]
                                  ).tz_localize(
-                                     'UTC').astype(np.int64)*1.0/10**9
+                                     'UTC').view(np.int64)*1.0/10**9
         sunset = pd.DatetimeIndex([dt.datetime(1994, 1, 2, 16, 59, 55), ]
                                   ).tz_localize(
-                                      'UTC').astype(np.int64)*1.0/10**9
+                                      'UTC').view(np.int64)*1.0/10**9
         sunrise = pd.DatetimeIndex([dt.datetime(1994, 1, 2, 7, 8, 12), ]
                                    ).tz_localize(
-                                       'UTC').astype(np.int64)*1.0/10**9
+                                       'UTC').view(np.int64)*1.0/10**9
         times = np.array(times)
         sunrise = np.array(sunrise)
         sunset = np.array(sunset)
@@ -305,19 +298,19 @@ class SpaBase:
                                   dt.datetime(2015, 8, 2),
                                   dt.datetime(2015, 12, 2)],
                                  ).tz_localize(
-                                     'UTC').astype(np.int64)*1.0/10**9
+                                     'UTC').view(np.int64)*1.0/10**9
         sunrise = pd.DatetimeIndex([dt.datetime(2015, 1, 2, 7, 19),
                                     dt.datetime(2015, 4, 2, 5, 43),
                                     dt.datetime(2015, 8, 2, 5, 1),
                                     dt.datetime(2015, 12, 2, 7, 1)],
                                    ).tz_localize(
-                                       'MST').astype(np.int64)*1.0/10**9
+                                       'MST').view(np.int64)*1.0/10**9
         sunset = pd.DatetimeIndex([dt.datetime(2015, 1, 2, 16, 49),
                                    dt.datetime(2015, 4, 2, 18, 24),
                                    dt.datetime(2015, 8, 2, 19, 10),
                                    dt.datetime(2015, 12, 2, 16, 38)],
                                   ).tz_localize(
-                                      'MST').astype(np.int64)*1.0/10**9
+                                      'MST').view(np.int64)*1.0/10**9
         times = np.array(times)
         sunrise = np.array(sunrise)
         sunset = np.array(sunset)
@@ -331,18 +324,18 @@ class SpaBase:
                                   dt.datetime(2015, 8, 2),
                                   dt.datetime(2015, 12, 2)],
                                  ).tz_localize(
-                                     'UTC').astype(np.int64)*1.0/10**9
+                                     'UTC').view(np.int64)*1.0/10**9
         sunrise = pd.DatetimeIndex([dt.datetime(2015, 1, 2, 7, 36),
                                     dt.datetime(2015, 4, 2, 5, 58),
                                     dt.datetime(2015, 8, 2, 5, 13),
                                     dt.datetime(2015, 12, 2, 7, 17)],
-                                   ).tz_localize('Asia/Shanghai').astype(
+                                   ).tz_localize('Asia/Shanghai').view(
                                        np.int64)*1.0/10**9
         sunset = pd.DatetimeIndex([dt.datetime(2015, 1, 2, 17, 0),
                                    dt.datetime(2015, 4, 2, 18, 39),
                                    dt.datetime(2015, 8, 2, 19, 28),
                                    dt.datetime(2015, 12, 2, 16, 50)],
-                                  ).tz_localize('Asia/Shanghai').astype(
+                                  ).tz_localize('Asia/Shanghai').view(
                                       np.int64)*1.0/10**9
         times = np.array(times)
         sunrise = np.array(sunrise)
@@ -355,7 +348,7 @@ class SpaBase:
     def test_earthsun_distance(self):
         times = (pd.date_range('2003-10-17 12:30:30', periods=1, freq='D')
                    .tz_localize('MST'))
-        unixtimes = times.tz_convert('UTC').astype(np.int64)*1.0/10**9
+        unixtimes = times.tz_convert('UTC').view(np.int64)*1.0/10**9
         unixtimes = np.array(unixtimes)
         result = self.spa.earthsun_distance(unixtimes, 64.0, 1)
         assert_almost_equal(R, result, 6)
@@ -391,17 +384,15 @@ class NumpySpaTest(unittest.TestCase, SpaBase):
         assert_almost_equal(JD, self.spa.julian_day(unixtimes)[0], 6)
 
 
-@pytest.mark.skipif(numba_version_int < 17,
-                    reason='Numba not installed or version not >= 0.17.0')
+@requires_numba
 class NumbaSpaTest(unittest.TestCase, SpaBase):
     """Import spa, compiling to numba, and run tests"""
     @classmethod
     def setUpClass(self):
         os.environ['PVLIB_USE_NUMBA'] = '1'
-        if numba_version_int >= 17:
-            import pvlib.spa as spa
-            spa = reload(spa)
-            self.spa = spa
+        import pvlib.spa as spa
+        spa = reload(spa)
+        self.spa = spa
 
     @classmethod
     def tearDownClass(self):
@@ -434,3 +425,30 @@ class NumbaSpaTest(unittest.TestCase, SpaBase):
             nresult, self.spa.solar_position(
                 times, lat, lon, elev, pressure, temp, delta_t,
                 atmos_refract, numthreads=3, sst=True)[:3], 5)
+
+
+# Define extra test cases for issue #2077
+test_cases_issue_2207 = [
+    ((2000, 1, 1, 12, 0, 0), 2451545.0),
+    ((1999, 1, 1, 0, 0, 0), 2451179.5),
+    ((1987, 1, 27, 0, 0, 0), 2446822.5),
+    ((1987, 6, 19, 12, 0, 0), 2446966.0),
+    ((1988, 1, 27, 0, 0, 0), 2447187.5),
+    ((1988, 6, 19, 12, 0, 0), 2447332.0),
+    ((1900, 1, 1, 0, 0, 0), 2415020.5),
+    ((1600, 1, 1, 0, 0, 0), 2305447.5),
+    ((1600, 12, 31, 0, 0, 0), 2305812.5),
+    ((837, 4, 10, 7, 12, 0), 2026871.8),
+    ((-123, 12, 31, 0, 0, 0), 1676496.5),
+    ((-122, 1, 1, 0, 0, 0), 1676497.5),
+    ((-1000, 7, 12, 12, 0, 0), 1356001.0),
+    ((-1000, 2, 29, 0, 0, 0), 1355866.5),
+    ((-1001, 8, 17, 21, 36, 0), 1355671.4),
+    ((-4712, 1, 1, 12, 0, 0), 0.0),
+]
+
+
+@pytest.mark.parametrize("inputs, expected", test_cases_issue_2207)
+def test_julian_day_issue_2207(inputs, expected):
+    result = pvlib.spa.julian_day_dt(*inputs, microsecond=0)
+    assert result == expected, f"Failed for inputs {inputs}"

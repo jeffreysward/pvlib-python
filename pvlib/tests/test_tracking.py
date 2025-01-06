@@ -7,7 +7,7 @@ from numpy.testing import assert_allclose
 
 import pvlib
 from pvlib import tracking
-from .conftest import DATA_DIR, assert_frame_equal
+from .conftest import DATA_DIR, assert_frame_equal, assert_series_equal
 from pvlib._deprecation import pvlibDeprecationWarning
 
 SINGLEAXIS_COL_ORDER = ['tracker_theta', 'aoi',
@@ -145,6 +145,22 @@ def test_max_angle():
 
     expect = pd.DataFrame({'aoi': 15, 'surface_azimuth': 90,
                            'surface_tilt': 45, 'tracker_theta': 45},
+                          index=[0], dtype=np.float64)
+    expect = expect[SINGLEAXIS_COL_ORDER]
+
+    assert_frame_equal(expect, tracker_data)
+
+
+def test_min_angle():
+    apparent_zenith = pd.Series([60])
+    apparent_azimuth = pd.Series([270])
+    tracker_data = tracking.singleaxis(apparent_zenith, apparent_azimuth,
+                                       axis_tilt=0, axis_azimuth=0,
+                                       max_angle=(-45, 50), backtrack=True,
+                                       gcr=2.0/7.0)
+
+    expect = pd.DataFrame({'aoi': 15, 'surface_azimuth': 270,
+                           'surface_tilt': 45, 'tracker_theta': -45},
                           index=[0], dtype=np.float64)
     expect = expect[SINGLEAXIS_COL_ORDER]
 
@@ -290,136 +306,6 @@ def test_low_sun_angles():
         assert_allclose(expected[k], v)
 
 
-def test_SingleAxisTracker_tracking():
-    with pytest.warns(pvlibDeprecationWarning):
-        system = tracking.SingleAxisTracker(max_angle=90, axis_tilt=30,
-                                            axis_azimuth=180, gcr=2.0/7.0,
-                                            backtrack=True)
-
-    apparent_zenith = pd.Series([30])
-    apparent_azimuth = pd.Series([135])
-
-    tracker_data = system.singleaxis(apparent_zenith, apparent_azimuth)
-
-    expect = pd.DataFrame({'aoi': 7.286245, 'surface_azimuth': 142.65730,
-                           'surface_tilt': 35.98741,
-                           'tracker_theta': -20.88121},
-                          index=[0], dtype=np.float64)
-    expect = expect[SINGLEAXIS_COL_ORDER]
-
-    assert_frame_equal(expect, tracker_data)
-
-    # results calculated using PVsyst
-    pvsyst_solar_azimuth = 7.1609
-    pvsyst_solar_height = 27.315
-    pvsyst_axis_tilt = 20.
-    pvsyst_axis_azimuth = 20.
-    with pytest.warns(pvlibDeprecationWarning):
-        pvsyst_system = tracking.SingleAxisTracker(
-            max_angle=60., axis_tilt=pvsyst_axis_tilt,
-            axis_azimuth=180+pvsyst_axis_azimuth, backtrack=False)
-    # the definition of azimuth is different from PYsyst
-    apparent_azimuth = pd.Series([180+pvsyst_solar_azimuth])
-    apparent_zenith = pd.Series([90-pvsyst_solar_height])
-    tracker_data = pvsyst_system.singleaxis(apparent_zenith, apparent_azimuth)
-    expect = pd.DataFrame({'aoi': 41.07852, 'surface_azimuth': 180-18.432,
-                           'surface_tilt': 24.92122,
-                           'tracker_theta': -15.18391},
-                          index=[0], dtype=np.float64)
-    expect = expect[SINGLEAXIS_COL_ORDER]
-
-    assert_frame_equal(expect, tracker_data)
-
-
-# see test_irradiance for more thorough testing
-def test_get_aoi():
-    with pytest.warns(pvlibDeprecationWarning):
-        system = tracking.SingleAxisTracker(max_angle=90, axis_tilt=30,
-                                            axis_azimuth=180, gcr=2.0/7.0,
-                                            backtrack=True)
-    surface_tilt = np.array([30, 0])
-    surface_azimuth = np.array([90, 270])
-    solar_zenith = np.array([70, 10])
-    solar_azimuth = np.array([100, 180])
-    out = system.get_aoi(surface_tilt, surface_azimuth,
-                         solar_zenith, solar_azimuth)
-    expected = np.array([40.632115, 10.])
-    assert_allclose(out, expected, atol=0.000001)
-
-
-def test_get_irradiance():
-    with pytest.warns(pvlibDeprecationWarning):
-        system = tracking.SingleAxisTracker(max_angle=90, axis_tilt=30,
-                                            axis_azimuth=180, gcr=2.0/7.0,
-                                            backtrack=True)
-    times = pd.date_range(start='20160101 1200-0700',
-                          end='20160101 1800-0700', freq='6H')
-    # latitude=32, longitude=-111
-    solar_position = pd.DataFrame(np.array(
-        [[55.36421554,  55.38851771,  34.63578446,  34.61148229,
-          172.32003763,  -3.44516534],
-         [96.50000401,  96.50000401,  -6.50000401,  -6.50000401,
-          246.91581654,  -3.56292888]]),
-        columns=['apparent_zenith', 'zenith', 'apparent_elevation',
-                 'elevation', 'azimuth', 'equation_of_time'],
-        index=times)
-    irrads = pd.DataFrame({'dni': [900, 0], 'ghi': [600, 0], 'dhi': [100, 0]},
-                          index=times)
-    solar_zenith = solar_position['apparent_zenith']
-    solar_azimuth = solar_position['azimuth']
-
-    # invalid warnings already generated in horizon test above,
-    # no need to clutter test output here
-    with np.errstate(invalid='ignore'):
-        tracker_data = system.singleaxis(solar_zenith, solar_azimuth)
-
-    # some invalid values in irradiance.py. not our problem here
-    with np.errstate(invalid='ignore'):
-        irradiance = system.get_irradiance(tracker_data['surface_tilt'],
-                                           tracker_data['surface_azimuth'],
-                                           solar_zenith,
-                                           solar_azimuth,
-                                           irrads['dni'],
-                                           irrads['ghi'],
-                                           irrads['dhi'])
-
-    expected = pd.DataFrame(data=np.array(
-        [[961.80070,   815.94490,   145.85580,   135.32820, 10.52757492],
-         [nan, nan, nan, nan, nan]]),
-                            columns=['poa_global', 'poa_direct',
-                                     'poa_diffuse', 'poa_sky_diffuse',
-                                     'poa_ground_diffuse'],
-                            index=times)
-
-    assert_frame_equal(irradiance, expected, check_less_precise=2)
-
-
-def test_SingleAxisTracker___repr__():
-    with pytest.warns(pvlibDeprecationWarning):
-        system = tracking.SingleAxisTracker(
-            max_angle=45, gcr=.25, module='blah', inverter='blarg',
-            temperature_model_parameters={'a': -3.56})
-    expected = """SingleAxisTracker:
-  axis_tilt: 0
-  axis_azimuth: 0
-  max_angle: 45
-  backtrack: True
-  gcr: 0.25
-  cross_axis_tilt: 0.0
-  name: None
-  Array:
-    name: None
-    mount: SingleAxisTrackerMount(axis_tilt=0, axis_azimuth=0, max_angle=45, backtrack=True, gcr=0.25, cross_axis_tilt=0.0, racking_model=None, module_height=None)
-    module: blah
-    albedo: 0.25
-    module_type: None
-    temperature_model_parameters: {'a': -3.56}
-    strings: 1
-    modules_per_string: 1
-  inverter: blarg"""  # noqa: E501
-    assert system.__repr__() == expected
-
-
 def test_calc_axis_tilt():
     # expected values
     expected_axis_tilt = 2.239  # [degrees]
@@ -430,7 +316,7 @@ def test_calc_axis_tilt():
     starttime = '2017-01-01T00:30:00-0300'
     stoptime = '2017-12-31T23:59:59-0300'
     lat, lon = -27.597300, -48.549610
-    times = pd.DatetimeIndex(pd.date_range(starttime, stoptime, freq='H'))
+    times = pd.DatetimeIndex(pd.date_range(starttime, stoptime, freq='h'))
     solpos = pvlib.solarposition.get_solarposition(times, lat, lon)
     # singleaxis tracker w/slope data
     slope_azimuth, slope_tilt = 77.34, 10.1149
@@ -462,21 +348,21 @@ def test_slope_aware_backtracking():
     """
     Test validation data set from https://www.nrel.gov/docs/fy20osti/76626.pdf
     """
-    expected_data = np.array(
-        [('2019-01-01T08:00-0500',  2.404287, 122.79177, -84.440, -10.899),
-         ('2019-01-01T09:00-0500', 11.263058, 133.288729, -72.604, -25.747),
-         ('2019-01-01T10:00-0500', 18.733558, 145.285552, -59.861, -59.861),
-         ('2019-01-01T11:00-0500', 24.109076, 158.939435, -45.578, -45.578),
-         ('2019-01-01T12:00-0500', 26.810735, 173.931802, -28.764, -28.764),
-         ('2019-01-01T13:00-0500', 26.482495, 189.371536, -8.475, -8.475),
-         ('2019-01-01T14:00-0500', 23.170447, 204.13681, 15.120, 15.120),
-         ('2019-01-01T15:00-0500', 17.296785, 217.446538, 39.562, 39.562),
-         ('2019-01-01T16:00-0500',  9.461862, 229.102218, 61.587, 32.339),
-         ('2019-01-01T17:00-0500',  0.524817, 239.330401, 79.530, 5.490)],
-        dtype=[
-            ('Time', '<M8[h]'), ('ApparentElevation', '<f8'),
-            ('SolarAzimuth', '<f8'), ('TrueTracking', '<f8'),
-            ('Backtracking', '<f8')])
+    index = pd.date_range('2019-01-01T08:00', '2019-01-01T17:00', freq='h')
+    index = index.tz_localize('Etc/GMT+5')
+    expected_data = pd.DataFrame(index=index, data=[
+        ( 2.404287, 122.79177, -84.440, -10.899),
+        (11.263058, 133.288729, -72.604, -25.747),
+        (18.733558, 145.285552, -59.861, -59.861),
+        (24.109076, 158.939435, -45.578, -45.578),
+        (26.810735, 173.931802, -28.764, -28.764),
+        (26.482495, 189.371536, -8.475, -8.475),
+        (23.170447, 204.13681, 15.120, 15.120),
+        (17.296785, 217.446538, 39.562, 39.562),
+        ( 9.461862, 229.102218, 61.587, 32.339),
+        ( 0.524817, 239.330401, 79.530, 5.490),
+    ], columns=['ApparentElevation', 'SolarAzimuth',
+                'TrueTracking', 'Backtracking'])
     expected_axis_tilt = 9.666
     expected_slope_angle = -2.576
     slope_azimuth, slope_tilt = 180.0, 10.0
@@ -492,23 +378,23 @@ def test_slope_aware_backtracking():
         90.0-expected_data['ApparentElevation'], expected_data['SolarAzimuth'],
         axis_tilt, axis_azimuth, max_angle=90.0, backtrack=True, gcr=0.5,
         cross_axis_tilt=cross_axis_tilt)
-    np.testing.assert_allclose(
-        sat['tracker_theta'], expected_data['Backtracking'],
-        rtol=1e-3, atol=1e-3)
+    assert_series_equal(sat['tracker_theta'],
+                        expected_data['Backtracking'].rename('tracker_theta'),
+                        check_less_precise=True)
     truetracking = tracking.singleaxis(
         90.0-expected_data['ApparentElevation'], expected_data['SolarAzimuth'],
         axis_tilt, axis_azimuth, max_angle=90.0, backtrack=False, gcr=0.5,
         cross_axis_tilt=cross_axis_tilt)
-    np.testing.assert_allclose(
-        truetracking['tracker_theta'], expected_data['TrueTracking'],
-        rtol=1e-3, atol=1e-3)
+    assert_series_equal(truetracking['tracker_theta'],
+                        expected_data['TrueTracking'].rename('tracker_theta'),
+                        check_less_precise=True)
 
 
 def test_singleaxis_aoi_gh1221():
     # vertical tracker
     loc = pvlib.location.Location(40.1134, -88.3695)
     dr = pd.date_range(
-        start='02-Jun-1998 00:00:00', end='02-Jun-1998 23:55:00', freq='5T',
+        start='02-Jun-1998 00:00:00', end='02-Jun-1998 23:55:00', freq='5min',
         tz='Etc/GMT+6')
     sp = loc.get_solarposition(dr)
     tr = pvlib.tracking.singleaxis(
@@ -517,3 +403,72 @@ def test_singleaxis_aoi_gh1221():
     fixed = pvlib.irradiance.aoi(90, 180, sp['apparent_zenith'], sp['azimuth'])
     fixed[np.isnan(tr['aoi'])] = np.nan
     assert np.allclose(tr['aoi'], fixed, equal_nan=True)
+
+
+def test_calc_surface_orientation_types():
+    # numpy arrays
+    rotations = np.array([-10, 0, 10])
+    expected_tilts = np.array([10, 0, 10], dtype=float)
+    expected_azimuths = np.array([270, 90, 90], dtype=float)
+    out = tracking.calc_surface_orientation(tracker_theta=rotations)
+    np.testing.assert_allclose(expected_tilts, out['surface_tilt'])
+    np.testing.assert_allclose(expected_azimuths, out['surface_azimuth'])
+
+    # pandas Series
+    rotations = pd.Series(rotations)
+    expected_tilts = pd.Series(expected_tilts).rename('surface_tilt')
+    expected_azimuths = pd.Series(expected_azimuths).rename('surface_azimuth')
+    out = tracking.calc_surface_orientation(tracker_theta=rotations)
+    assert_series_equal(expected_tilts, out['surface_tilt'])
+    assert_series_equal(expected_azimuths, out['surface_azimuth'])
+
+    # float
+    for rotation, expected_tilt, expected_azimuth in zip(
+            rotations, expected_tilts, expected_azimuths):
+        out = tracking.calc_surface_orientation(rotation)
+        assert out['surface_tilt'] == pytest.approx(expected_tilt)
+        assert out['surface_azimuth'] == pytest.approx(expected_azimuth)
+
+
+def test_calc_surface_orientation_kwargs():
+    # non-default axis tilt & azimuth
+    rotations = np.array([-10, 0, 10])
+    expected_tilts = np.array([22.2687445, 20.0, 22.2687445])
+    expected_azimuths = np.array([152.72683041, 180.0, 207.27316959])
+    out = tracking.calc_surface_orientation(rotations,
+                                            axis_tilt=20,
+                                            axis_azimuth=180)
+    np.testing.assert_allclose(out['surface_tilt'], expected_tilts)
+    np.testing.assert_allclose(out['surface_azimuth'], expected_azimuths)
+
+
+def test_calc_surface_orientation_special():
+    # special cases for rotations
+    rotations = np.array([-180, -90, -0, 0, 90, 180])
+    expected_tilts = np.array([180, 90, 0, 0, 90, 180], dtype=float)
+    expected_azimuths = [270, 270, 90, 90, 90, 90]
+    out = tracking.calc_surface_orientation(rotations)
+    np.testing.assert_allclose(out['surface_tilt'], expected_tilts)
+    np.testing.assert_allclose(out['surface_azimuth'], expected_azimuths)
+
+    # special case for axis_tilt
+    rotations = np.array([-10, 0, 10])
+    expected_tilts = np.array([90, 90, 90], dtype=float)
+    expected_azimuths = np.array([350, 0, 10], dtype=float)
+    out = tracking.calc_surface_orientation(rotations, axis_tilt=90)
+    np.testing.assert_allclose(out['surface_tilt'], expected_tilts)
+    np.testing.assert_allclose(out['surface_azimuth'], expected_azimuths)
+
+    # special cases for axis_azimuth
+    rotations = np.array([-10, 0, 10])
+    expected_tilts = np.array([10, 0, 10], dtype=float)
+    expected_azimuth_offsets = np.array([-90, 90, 90], dtype=float)
+    for axis_azimuth in [0, 90, 180, 270, 360]:
+        expected_azimuths = (axis_azimuth + expected_azimuth_offsets) % 360
+        out = tracking.calc_surface_orientation(rotations,
+                                                axis_azimuth=axis_azimuth)
+        np.testing.assert_allclose(out['surface_tilt'], expected_tilts)
+        # the rounding is a bit ugly, but necessary to test approximately equal
+        # in a modulo-360 sense.
+        np.testing.assert_allclose(np.round(out['surface_azimuth'], 4) % 360,
+                                   expected_azimuths, rtol=1e-5, atol=1e-5)
